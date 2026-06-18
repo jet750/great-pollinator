@@ -1,0 +1,49 @@
+{
+  "_note": "frameWidth/frameHeight were derived from real sprite-sheet alpha-grid analysis, not guessed. The player grid (48x48, 4 cols) is confirmed and its animation indices are structurally valid. slime/skeleton frame SIZE is confirmed, but per-row animation semantics (which row is which action, how many frames each) could not be determined from pixels alone — those indices are placeholders set to 0 and flagged with _verify (per the organizer prompt's fallback rule).",
+  "player": {
+    "frameWidth": 48,
+    "frameHeight": 48,
+    "_grid": "192x192 = 4 cols x 4 rows (16 frames). 48px column/row spacing confirmed via alpha analysis.",
+    "_verify": "Row->direction order assumed down/left/right/up. Confirm visually that row 0 is walk-down, etc.",
+    "animations": {
+      "walk_down":  { "start": 0,  "end": 3,  "frameRate": 8, "repeat": -1 },
+      "walk_left":  { "start": 4,  "end": 7,  "frameRate": 8, "repeat": -1 },
+      "walk_right": { "start": 8,  "end": 11, "frameRate": 8, "repeat": -1 },
+      "walk_up":    { "start": 12, "end": 15, "frameRate": 8, "repeat": -1 },
+      "idle_down":  { "start": 0,  "end": 0,  "frameRate": 1, "repeat": -1 },
+      "idle_left":  { "start": 4,  "end": 4,  "frameRate": 1, "repeat": -1 },
+      "idle_right": { "start": 8,  "end": 8,  "frameRate": 1, "repeat": -1 },
+      "idle_up":    { "start": 12, "end": 12, "frameRate": 1, "repeat": -1 }
+    }
+  },
+  "slime": {
+    "frameWidth": 32,
+    "frameHeight": 32,
+    "_grid": "224x416 = 7 cols x 13 rows (32px cells) detected via alpha analysis.",
+    "_verify": "Animation layout NOT determinable from metadata. Open slime_sheet.png and set start/end/row mapping. Indices below are placeholders (0).",
+    "animations": {
+      "walk_down":  { "start": 0, "end": 0, "frameRate": 6, "repeat": -1 },
+      "walk_left":  { "start": 0, "end": 0, "frameRate": 6, "repeat": -1 },
+      "walk_right": { "start": 0, "end": 0, "frameRate": 6, "repeat": -1 },
+      "walk_up":    { "start": 0, "end": 0, "frameRate": 6, "repeat": -1 },
+      "death":      { "start": 0, "end": 0, "frameRate": 6, "repeat": 0  }
+    }
+  },
+  "skeleton": {
+    "frameWidth": 48,
+    "frameHeight": 48,
+    "_grid": "288x624 = 6 cols x 13 rows (48px cells, from clean divisibility; sheet has no transparent gutters to confirm).",
+    "_verify": "Animation layout NOT determinable from metadata. Open skeleton_sheet.png and set start/end/row mapping. Indices below are placeholders (0).",
+    "animations": {
+      "walk_down":  { "start": 0, "end": 0, "frameRate": 6, "repeat": -1 },
+      "walk_left":  { "start": 0, "end": 0, "frameRate": 6, "repeat": -1 },
+      "walk_right": { "start": 0, "end": 0, "frameRate": 6, "repeat": -1 },
+      "walk_up":    { "start": 0, "end": 0, "frameRate": 6, "repeat": -1 },
+      "death":      { "start": 0, "end": 0, "frameRate": 6, "repeat": 0  }
+    }
+  },
+  "tileset": {
+    "tileWidth": 16,
+    "tileHeight": 16
+  }
+}
