@@ -226,12 +226,21 @@ export class HiveStore {
         maxed = (upgrades.healingItems || 0) >= 3;
         detail = `${u.desc} (held ${upgrades.healingItems || 0}/3)`;
       }
-      text(ctx, detail, rx + 12, ry + 28, { fontStr: font(FONTS.body, 10), color: rgba(COLORS.ink, 0.6), align: 'left' });
+      const bw = 96;
+      const bx2 = rx + rw - bw - 8;
+      const maxDetailW = bx2 - (rx + 12) - 8; // space between left edge and buy button
+      ctx.save();
+      ctx.font = font(FONTS.body, 10);
+      let displayDetail = detail;
+      while (ctx.measureText(displayDetail).width > maxDetailW && displayDetail.length > 4) {
+        displayDetail = displayDetail.slice(0, -2) + '…';
+      }
+      ctx.restore();
+      text(ctx, displayDetail, rx + 12, ry + 28, { fontStr: font(FONTS.body, 10), color: rgba(COLORS.ink, 0.6), align: 'left' });
 
       // buy button
       const canAfford = available >= u.cost;
       const buyEnabled = !maxed && canAfford;
-      const bw = 96;
       const bx = rx + rw - bw - 8;
       const byy = ry + (rowH - 8) / 2 - 14;
       panel(ctx, bx, byy, bw, 28, {
@@ -251,11 +260,11 @@ export class HiveStore {
 
   _drawHangar(ctx, { banked, upgrades, px, py, pw, ph, contentY }) {
     const cx = px + pw / 2;
-    text(ctx, 'SELECT YOUR CRAFT', cx, contentY - 18, {
+    text(ctx, 'SELECT YOUR CRAFT', cx, contentY + 6, {
       fontStr: font(FONTS.body, 12, '700'),
       color: rgba(COLORS.ink, 0.7),
     });
-    text(ctx, `Banked pollen: ${banked}`, cx, contentY - 2, {
+    text(ctx, `Banked pollen: ${banked}`, cx, contentY + 22, {
       fontStr: font(FONTS.mono, 11), color: rgba(COLORS.ink, 0.6),
     });
 
@@ -269,7 +278,7 @@ export class HiveStore {
     const gridX = px + 24;
     const gridW = pw - 48;
     const cardW = (gridW - gap * (cols - 1)) / cols;
-    const gridY = contentY + 10;
+    const gridY = contentY + 38; // push grid down to clear these labels
     const gridH = py + ph - 64 - gridY - 8;
     const cardH = (gridH - gap * (rows - 1)) / rows;
 
@@ -289,7 +298,7 @@ export class HiveStore {
       });
 
       const ccx = cardX + cardW / 2;
-      text(ctx, craft.name, ccx, cardY + 16, { fontStr: font(FONTS.title, 17, '600'), color: COLORS.ink });
+      text(ctx, craft.name, ccx, cardY + 16, { fontStr: font(FONTS.title, 16, '600'), color: COLORS.ink });
 
       // illustration
       ctx.save();
@@ -297,42 +306,45 @@ export class HiveStore {
       this._drawCraftIcon(ctx, craft.id);
       ctx.restore();
 
-      // stats
-      const statY = cardY + 70;
-      text(ctx, `HP ${craft.hp}`, ccx, statY, { fontStr: font(FONTS.body, 11), color: rgba(COLORS.ink, 0.85) });
-      text(ctx, `Speed ${craft.speed}`, ccx, statY + 14, { fontStr: font(FONTS.body, 11), color: rgba(COLORS.ink, 0.85) });
-      text(ctx, `Capacity ${craft.capacity}`, ccx, statY + 28, { fontStr: font(FONTS.body, 11), color: rgba(COLORS.ink, 0.85) });
-
-      // special ability (wrapped italic)
-      this._wrapText(ctx, craft.special, ccx, statY + 48, cardW - 16, 12, {
-        fontStr: `italic ${font(FONTS.body, 10)}`,
-        color: rgba(COLORS.ink, 0.7),
-      });
+      // stats — clamped so they never fall behind the action button
+      const btnAreaTop = cardY + cardH - 38; // button + safe margin
+      const statY = Math.min(cardY + 72, btnAreaTop - 72); // guaranteed clear of button
+      text(ctx, `HP ${craft.hp}`, ccx, statY, { fontStr: font(FONTS.body, 12), color: rgba(COLORS.ink, 0.85) });
+      text(ctx, `Speed ${craft.speed}`, ccx, statY + 16, { fontStr: font(FONTS.body, 12), color: rgba(COLORS.ink, 0.85) });
+      text(ctx, `Capacity ${craft.capacity}`, ccx, statY + 32, { fontStr: font(FONTS.body, 12), color: rgba(COLORS.ink, 0.85) });
+      // Special ability: only render if there's room above the button
+      const specialY = statY + 50;
+      if (specialY + 20 < btnAreaTop) {
+        this._wrapText(ctx, craft.special, ccx, specialY, cardW - 24, 11, {
+          fontStr: `italic ${font(FONTS.body, 11)}`,
+          color: rgba(COLORS.ink, 0.7),
+        });
+      }
 
       // action control (bottom of card)
       const aw = cardW - 20;
       const ax = cardX + 10;
-      const ayy = cardY + cardH - 32;
+      const ayy = cardY + cardH - 34;
       if (isActive) {
-        panel(ctx, ax, ayy, aw, 24, { fill: rgba(COLORS.gold, 0.3), stroke: COLORS.gold, lineWidth: 1.5, radius: 6 });
-        text(ctx, 'ACTIVE', ax + aw / 2, ayy + 12, { fontStr: font(FONTS.body, 12, '700'), color: COLORS.ink });
+        panel(ctx, ax, ayy, aw, 26, { fill: rgba(COLORS.gold, 0.3), stroke: COLORS.gold, lineWidth: 1.5, radius: 6 });
+        text(ctx, 'ACTIVE', ax + aw / 2, ayy + 13, { fontStr: font(FONTS.body, 12, '700'), color: COLORS.ink });
       } else if (isUnlocked) {
-        panel(ctx, ax, ayy, aw, 24, { fill: rgba(COLORS.green, 0.3), stroke: COLORS.ink, lineWidth: 1.4, radius: 6 });
-        text(ctx, 'SWITCH', ax + aw / 2, ayy + 12, { fontStr: font(FONTS.body, 12, '700'), color: COLORS.ink });
-        this._btn('switch-craft', ax, ayy, aw, 24, craft.id);
+        panel(ctx, ax, ayy, aw, 26, { fill: rgba(COLORS.green, 0.3), stroke: COLORS.ink, lineWidth: 1.4, radius: 6 });
+        text(ctx, 'SWITCH', ax + aw / 2, ayy + 13, { fontStr: font(FONTS.body, 12, '700'), color: COLORS.ink });
+        this._btn('switch-craft', ax, ayy, aw, 26, craft.id);
       } else {
         const canAfford = banked >= craft.cost;
-        panel(ctx, ax, ayy, aw, 24, {
+        panel(ctx, ax, ayy, aw, 26, {
           fill: canAfford ? rgba(COLORS.gold, 0.3) : rgba(COLORS.ink, 0.05),
           stroke: canAfford ? COLORS.ink : rgba(COLORS.ink, 0.3),
           lineWidth: canAfford ? 1.6 : 1,
           radius: 6,
         });
-        text(ctx, `${craft.cost} ◆`, ax + aw / 2, ayy + 12, {
+        text(ctx, `${craft.cost} ◆`, ax + aw / 2, ayy + 13, {
           fontStr: font(FONTS.mono, 12, '700'),
           color: canAfford ? COLORS.ink : rgba(COLORS.ink, 0.4),
         });
-        if (canAfford) this._btn('buy-craft', ax, ayy, aw, 24, craft.id);
+        if (canAfford) this._btn('buy-craft', ax, ayy, aw, 26, craft.id);
       }
     });
   }
