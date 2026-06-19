@@ -21,7 +21,6 @@ const FACE_LERP = 0.22;
 
 const MAX_HP = 120;
 const MAX_CARRY = 5;
-const HARD_CAP = 8;
 
 const DR_PER_LEVEL = 0.05;
 const THORN_DAMAGE = 8;
@@ -73,6 +72,14 @@ export class Locust {
     this.fsm = new StateMachine('FLYING', {
       FLYING: {}, LUNGING: {}, LANDING: {}, LANDED: {}, DOCKED: {}, DEAD: {},
     });
+
+    // Upgrade bases. Locust has no dash attack → _baseDashCooldown = 0.
+    this._baseCapacity = MAX_CARRY;
+    this._baseDashCooldown = 0;
+    this.dashCooldownBase = 0;
+    this.baseCollectionRadius = 60;
+    this.comboWindowBonus = 0;
+    this.applyUpgrades(upgrades);
   }
 
   // ---- getters / craft interface ----
@@ -106,15 +113,22 @@ export class Locust {
   applyUpgrades(upgrades) {
     this.drLevel = upgrades.damageReduction || 0;
     this.hp = Math.min(this.hp, this.maxHp);
+    const capLevel = upgrades.pollenCapacity || 0;
+    this.maxCarry = this._baseCapacity + 5 * capLevel;
+    const dcLevel = upgrades.dashCooldown || 0;
+    this.dashCooldownBase = this._baseDashCooldown * Math.pow(0.9, dcLevel);
+    const magLevel = upgrades.magnetRadius || 0;
+    this.baseCollectionRadius = 60 + 20 * magLevel;
+    this.comboWindowBonus = (upgrades.comboWindow || 0) * 0.5;
   }
 
   // ---- pollen ----
   canCollect() {
-    return this.carriedCount + 1 <= HARD_CAP;
+    return this.carriedCount + 1 <= this.maxCarry + 5;
   }
 
   addPollen(type) {
-    if (this.carriedCount + 1 > HARD_CAP) return false;
+    if (this.carriedCount + 1 > this.maxCarry + 5) return false;
     const value = type === 'rare' ? 5 : type === 'uncommon' ? 3 : 1;
     this.carried[type] += 1;
     this.collectedCount += 1;

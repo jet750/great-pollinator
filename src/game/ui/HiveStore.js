@@ -3,25 +3,36 @@
 // pointer event and executes the returned intent (deposit / buy / tab / exit).
 // The store itself holds no game state beyond the active tab.
 
-import { COLORS, FONTS, font, text, panel, rgba } from '../utils/renderer.js';
+import { COLORS, FONTS, font, text, panel, rgba, drawFlower, drawLeaf } from '../utils/renderer.js';
+import { levelCapFor, BIOME_DEFS, BIOME_ORDER, isBiomeUnlocked } from '../world/biomeConfig.js';
 
-// Upgrade catalog. `kind: 'level'` items cap at `max`; healing items add stock.
+// Base upgrades — available in all biomes, levels 1–20 total (5 per biome).
+// The `biomeUnlock` field means the upgrade type first becomes purchasable
+// when that biome is active. The effective max in a biome = biome's levelCap.
 export const UPGRADES = [
-  { id: 'maxHp', name: 'Max HP +10', cost: 15, max: 5, kind: 'level', desc: '+10 max HP per level' },
-  { id: 'damageReduction', name: 'Damage Reduction', cost: 10, max: 5, kind: 'level', formula: '×0.95 per level (stacking)' },
-  { id: 'attackBoost', name: 'Attack Boost', cost: 10, max: 5, kind: 'level', formula: '+×0.05 per level (max ×1.25)' },
-  { id: 'heal1', name: 'Healing Item ×1', cost: 8, kind: 'heal', amount: 1, desc: 'max 3 held' },
-  { id: 'heal3', name: 'Healing Item ×3', cost: 20, kind: 'heal', amount: 3, desc: 'if space allows' },
+  { id: 'maxHp',          name: 'Max HP',              cost: 15, globalMax: 20, kind: 'level', formula: '+10 HP/level', biomeUnlock: 'meadow' },
+  { id: 'damageReduction',name: 'Damage Reduction',     cost: 10, globalMax: 20, kind: 'level', formula: '×0.95/level', biomeUnlock: 'meadow' },
+  { id: 'attackBoost',    name: 'Attack Boost',         cost: 10, globalMax: 20, kind: 'level', formula: '+5% dmg/level', biomeUnlock: 'meadow' },
+  { id: 'pollenCapacity', name: 'Pollen Capacity',      cost: 12, globalMax: 20, kind: 'level', formula: '+5 carry/level', biomeUnlock: 'meadow' },
+  { id: 'dashCooldown',   name: 'Practiced Sting',      cost: 14, globalMax: 20, kind: 'level', formula: '-10% cooldown/lv', biomeUnlock: 'forest' },
+  { id: 'magnetRadius',   name: 'Floral Attunement',    cost: 14, globalMax: 20, kind: 'level', formula: '+20px radius/lv', biomeUnlock: 'garden' },
+  { id: 'comboWindow',    name: 'Focused Forager',       cost: 14, globalMax: 20, kind: 'level', formula: '+0.5s combo/lv', biomeUnlock: 'greenhouse' },
+  { id: 'heal1',          name: 'Healing Item ×1',      cost: 8,  kind: 'heal', amount: 1, desc: 'max 3 held' },
+  { id: 'heal3',          name: 'Healing Item ×3',      cost: 20, kind: 'heal', amount: 3, desc: 'if space allows' },
 ];
 
-// Craft catalog for the Hangar tab. The Bee is always available (cost 0);
-// Moth and Locust are unlocked with banked pollen. Costs are deducted from the
-// banked total in main.js.
+// Craft catalog for the Hangar tab. The Bee is always available (cost 0); the
+// rest are unlocked with banked pollen. Each craft first appears in the Hangar
+// once its `biomeUnlock` biome is unlocked. Costs are deducted in main.js.
 export const CRAFTS = [
-  { id: 'bee', name: 'Bee', hp: '100–150', speed: 180, capacity: 10, cost: 0, special: 'Rear-sting dash. Balanced collector with the highest capacity.' },
-  { id: 'moth', name: 'Moth', hp: 80, speed: 220, capacity: 5, cost: 50, special: 'Frontal consume pulse. Fast and frail; clears mobile enemies.' },
-  { id: 'locust', name: 'Locust', hp: 120, speed: 140, capacity: 5, cost: 80, special: 'AoE chomp. Slow tank; the only craft that kills Carnivorous Plants.' },
-  { id: 'hornet', name: 'Hornet', hp: 90, speed: 200, capacity: 8, cost: 120, special: 'Projectile sting. Ranged specialist; fires from afar.' },
+  { id: 'bee', name: 'Bee', hp: '100–150', speed: 180, capacity: 10, cost: 0, biomeUnlock: 'meadow', special: 'Rear-sting dash. Balanced collector with the highest capacity.' },
+  { id: 'moth', name: 'Moth', hp: 80, speed: 220, capacity: 5, cost: 50, biomeUnlock: 'meadow', special: 'Frontal consume pulse. Fast and frail; clears mobile enemies.' },
+  { id: 'locust', name: 'Locust', hp: 120, speed: 140, capacity: 5, cost: 80, biomeUnlock: 'forest', special: 'AoE chomp. Slow tank; the only craft that kills Carnivorous Plants.' },
+  { id: 'hornet', name: 'Hornet', hp: 90, speed: 200, capacity: 8, cost: 120, biomeUnlock: 'forest', special: 'Projectile sting. Ranged specialist; fires from afar.' },
+  { id: 'butterfly', name: 'Butterfly', hp: 70, speed: 240, capacity: 8, cost: 200, biomeUnlock: 'garden', special: 'Glide dash: passes over thorns + enemies. Second action: petal burst slows nearby foes.' },
+  { id: 'wasp',      name: 'Wasp',      hp: 85, speed: 210, capacity: 7, cost: 200, biomeUnlock: 'garden', special: 'Ring sting: fires 8 projectiles radially. High damage, slower fire rate than Hornet.' },
+  { id: 'dragonfly', name: 'Dragonfly', hp: 95, speed: 260, capacity: 9, cost: 400, biomeUnlock: 'greenhouse', special: 'Phase dash: brief invincibility frame on every dash. Fastest craft.' },
+  { id: 'spider_craft', name: 'Spider', hp: 110, speed: 160, capacity: 12, cost: 400, biomeUnlock: 'greenhouse', special: 'Web layer: places slow-zone webs on spacebar hold. Lures enemies for pollen drops.' },
 ];
 
 export class HiveStore {
@@ -52,7 +63,7 @@ export class HiveStore {
     return null;
   }
 
-  draw(ctx, { bee, banked, upgrades, w, h, isMobile }) {
+  draw(ctx, { bee, banked, upgrades, w, h, isMobile, activeBiome = 'meadow' }) {
     this._buttons = [];
 
     // dim backdrop
@@ -77,8 +88,8 @@ export class HiveStore {
     });
 
     // ---- tabs ----
-    const tabs = ['BANK', 'STORE', 'HANGAR'];
-    const tabW = (pw - 60) / 3;
+    const tabs = ['BANK', 'STORE', 'HANGAR', 'BIOMES'];
+    const tabW = (pw - 60) / 4;
     const tabY = py + 54;
     tabs.forEach((t, i) => {
       const tx = px + 30 + i * tabW;
@@ -90,7 +101,7 @@ export class HiveStore {
         radius: 6,
       });
       text(ctx, t, tx + (tabW - 8) / 2, tabY + 16, {
-        fontStr: font(FONTS.body, 13, '700'),
+        fontStr: font(FONTS.body, 12, '700'),
         color: active ? COLORS.ink : rgba(COLORS.ink, 0.6),
       });
       this._btn('tab', tx, tabY, tabW - 8, 32, t);
@@ -98,8 +109,9 @@ export class HiveStore {
 
     const contentY = tabY + 50;
     if (this.tab === 'BANK') this._drawBank(ctx, { bee, banked, px, py, pw, ph, contentY });
-    else if (this.tab === 'STORE') this._drawStore(ctx, { bee, banked, upgrades, px, pw, contentY });
-    else this._drawHangar(ctx, { banked, upgrades, px, py, pw, ph, contentY });
+    else if (this.tab === 'STORE') this._drawStore(ctx, { bee, banked, upgrades, px, pw, contentY, activeBiome });
+    else if (this.tab === 'HANGAR') this._drawHangar(ctx, { banked, upgrades, px, py, pw, ph, contentY, activeBiome });
+    else this._drawBiomes(ctx, { banked, activeBiome, px, py, pw, ph, contentY });
 
     // ---- Fly Out button ----
     const exitW = 140;
@@ -199,16 +211,24 @@ export class HiveStore {
     }
   }
 
-  _drawStore(ctx, { bee, banked, upgrades, px, pw, contentY }) {
+  _drawStore(ctx, { bee, banked, upgrades, px, pw, contentY, activeBiome = 'meadow' }) {
     const carried = bee.getCarriedTotal();
     const available = banked + carried;
-    text(ctx, `Spendable pollen: ${available}  (banked ${banked} + carried ${carried})`, px + pw / 2, contentY - 8, {
+    const activeIdx = Math.max(0, BIOME_ORDER.indexOf(activeBiome));
+    const biomeCap = levelCapFor(activeBiome);
+    text(ctx, `Spendable pollen: ${available}  (level cap ${biomeCap} in ${BIOME_DEFS[activeBiome]?.name || 'Meadow'})`, px + pw / 2, contentY - 8, {
       fontStr: font(FONTS.body, 11),
       color: rgba(COLORS.ink, 0.7),
     });
 
+    // Only show upgrades whose biomeUnlock biome is the current biome or earlier.
+    const visible = UPGRADES.filter((u) => {
+      if (!u.biomeUnlock) return true; // heal items: always available
+      return BIOME_ORDER.indexOf(u.biomeUnlock) <= activeIdx;
+    });
+
     const rowH = 46;
-    UPGRADES.forEach((u, i) => {
+    visible.forEach((u, i) => {
       const ry = contentY + 12 + i * rowH;
       const rx = px + 24;
       const rw = pw - 48;
@@ -218,10 +238,15 @@ export class HiveStore {
       text(ctx, u.name, rx + 12, ry + 14, { fontStr: font(FONTS.body, 13, '700'), color: COLORS.ink, align: 'left' });
       let detail;
       let maxed;
+      let cappedByBiome = false;
       if (u.kind === 'level') {
         const lvl = upgrades[u.id] || 0;
-        maxed = lvl >= u.max;
-        detail = `Lv ${lvl}/${u.max}${u.formula ? '  ' + u.formula : ''}`;
+        // Effective max in this biome = min(global max, biome level cap).
+        const effectiveMax = Math.min(u.globalMax, biomeCap);
+        maxed = lvl >= effectiveMax;
+        // Capped by the biome (not the absolute global) → label CAP, not MAX.
+        cappedByBiome = maxed && lvl < u.globalMax;
+        detail = `Lv ${lvl}/${effectiveMax}${u.formula ? '  ' + u.formula : ''}`;
       } else {
         maxed = (upgrades.healingItems || 0) >= 3;
         detail = `${u.desc} (held ${upgrades.healingItems || 0}/3)`;
@@ -249,16 +274,17 @@ export class HiveStore {
         lineWidth: buyEnabled ? 1.6 : 1,
         radius: 6,
       });
-      const label = maxed ? 'MAX' : `${u.cost} ◆`;
+      // CAP (biome cap reached, can level further next biome) vs MAX (global).
+      const label = maxed ? (cappedByBiome ? 'CAP' : 'MAX') : `${u.cost} ◆`;
       text(ctx, label, bx + bw / 2, byy + 14, {
         fontStr: font(FONTS.mono, 12, '700'),
-        color: buyEnabled ? COLORS.ink : rgba(COLORS.ink, 0.4),
+        color: buyEnabled ? COLORS.ink : (cappedByBiome ? COLORS.ember : rgba(COLORS.ink, 0.4)),
       });
       if (buyEnabled) this._btn('buy', bx, byy, bw, 28, u.id);
     });
   }
 
-  _drawHangar(ctx, { banked, upgrades, px, py, pw, ph, contentY }) {
+  _drawHangar(ctx, { banked, upgrades, px, py, pw, ph, contentY, activeBiome = 'meadow' }) {
     const cx = px + pw / 2;
     text(ctx, 'SELECT YOUR CRAFT', cx, contentY + 6, {
       fontStr: font(FONTS.body, 12, '700'),
@@ -271,9 +297,14 @@ export class HiveStore {
     const unlocked = upgrades.craftsUnlocked || [];
     const active = upgrades.activeCraft || 'bee';
 
-    // 2-column grid so all four crafts stay readable on phone-width panels.
+    // Only show crafts whose biomeUnlock biome has been unlocked (banked-wise).
+    const visibleCrafts = CRAFTS.filter(
+      (c) => !c.biomeUnlock || isBiomeUnlocked(c.biomeUnlock, banked),
+    );
+
+    // 2-column grid so crafts stay readable on phone-width panels.
     const cols = 2;
-    const rows = Math.ceil(CRAFTS.length / cols);
+    const rows = Math.max(1, Math.ceil(visibleCrafts.length / cols));
     const gap = 10;
     const gridX = px + 24;
     const gridW = pw - 48;
@@ -282,7 +313,7 @@ export class HiveStore {
     const gridH = py + ph - 64 - gridY - 8;
     const cardH = (gridH - gap * (rows - 1)) / rows;
 
-    CRAFTS.forEach((craft, i) => {
+    visibleCrafts.forEach((craft, i) => {
       const col = i % cols;
       const row = Math.floor(i / cols);
       const cardX = gridX + col * (cardW + gap);
@@ -349,6 +380,142 @@ export class HiveStore {
     });
   }
 
+  _drawBiomes(ctx, { banked, activeBiome, px, py, pw, ph, contentY }) {
+    const cx = px + pw / 2;
+    text(ctx, 'CHOOSE YOUR EXPEDITION', cx, contentY + 6, {
+      fontStr: font(FONTS.body, 12, '700'),
+      color: rgba(COLORS.ink, 0.7),
+    });
+    text(ctx, 'Switch takes effect on your next Fly Out.', cx, contentY + 22, {
+      fontStr: font(FONTS.body, 10), color: rgba(COLORS.ink, 0.6),
+    });
+
+    const cols = 2;
+    const rows = 2;
+    const gap = 12;
+    const gridX = px + 24;
+    const gridW = pw - 48;
+    const cardW = (gridW - gap * (cols - 1)) / cols;
+    const gridY = contentY + 38;
+    const gridH = py + ph - 64 - gridY - 8;
+    const cardH = (gridH - gap * (rows - 1)) / rows;
+
+    BIOME_ORDER.forEach((id, i) => {
+      const def = BIOME_DEFS[id];
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const cardX = gridX + col * (cardW + gap);
+      const cardY = gridY + row * (cardH + gap);
+      const isActive = activeBiome === id;
+      const unlocked = isBiomeUnlocked(id, banked);
+
+      panel(ctx, cardX, cardY, cardW, cardH, {
+        fill: isActive ? rgba(COLORS.gold, 0.12) : rgba(COLORS.ink, 0.03),
+        stroke: isActive ? COLORS.gold : (unlocked ? rgba(def.border, 0.8) : rgba(COLORS.ink, 0.3)),
+        lineWidth: isActive ? 2.5 : 1.4,
+        radius: 8,
+      });
+
+      const ccx = cardX + cardW / 2;
+      text(ctx, def.name, ccx, cardY + 16, { fontStr: font(FONTS.title, 16, '600'), color: COLORS.ink });
+
+      // threat dots (● filled / ○ empty out of 4)
+      const n = 4;
+      const spacing = 12;
+      const startX = ccx - ((n - 1) * spacing) / 2;
+      for (let d = 0; d < n; d++) {
+        ctx.beginPath();
+        ctx.arc(startX + d * spacing, cardY + 34, 3.5, 0, Math.PI * 2);
+        if (d < def.threat) {
+          ctx.fillStyle = def.border;
+          ctx.fill();
+        } else {
+          ctx.strokeStyle = rgba(COLORS.ink, 0.4);
+          ctx.lineWidth = 1.1;
+          ctx.stroke();
+        }
+      }
+
+      // botanical illustration (mid-card)
+      ctx.save();
+      ctx.translate(ccx, cardY + cardH * 0.52);
+      this._drawBiomeBotanical(ctx, id);
+      ctx.restore();
+
+      // swatch strip
+      const sw = 16;
+      const sh = 9;
+      const total = def.swatches.length * sw + (def.swatches.length - 1) * 4;
+      let swx = ccx - total / 2;
+      const swy = cardY + cardH - 50;
+      for (const c of def.swatches) {
+        ctx.fillStyle = c;
+        ctx.fillRect(swx, swy, sw, sh);
+        ctx.strokeStyle = rgba(COLORS.ink, 0.3);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(swx, swy, sw, sh);
+        swx += sw + 4;
+      }
+
+      // status / action control (bottom of card)
+      const aw = cardW - 20;
+      const ax = cardX + 10;
+      const ayy = cardY + cardH - 32;
+      if (isActive) {
+        panel(ctx, ax, ayy, aw, 24, { fill: rgba(COLORS.gold, 0.3), stroke: COLORS.gold, lineWidth: 1.5, radius: 6 });
+        text(ctx, 'ACTIVE', ax + aw / 2, ayy + 12, { fontStr: font(FONTS.body, 11, '700'), color: COLORS.ink });
+      } else if (unlocked) {
+        panel(ctx, ax, ayy, aw, 24, { fill: rgba(COLORS.green, 0.3), stroke: COLORS.ink, lineWidth: 1.4, radius: 6 });
+        text(ctx, 'TRAVEL HERE', ax + aw / 2, ayy + 12, { fontStr: font(FONTS.body, 11, '700'), color: COLORS.ink });
+        this._btn('switch-biome', ax, ayy, aw, 24, id);
+      } else {
+        panel(ctx, ax, ayy, aw, 24, { fill: rgba(COLORS.ink, 0.05), stroke: rgba(COLORS.crimson, 0.5), lineWidth: 1.2, radius: 6 });
+        text(ctx, `🔒 bank ${def.unlockCost} ◆`, ax + aw / 2, ayy + 12, {
+          fontStr: font(FONTS.mono, 11, '700'), color: rgba(COLORS.crimson, 0.85),
+        });
+      }
+    });
+  }
+
+  // Per-biome botanical illustration for the BIOMES tab cards.
+  _drawBiomeBotanical(ctx, id) {
+    switch (id) {
+      case 'meadow':
+        drawFlower(ctx, 18, 8, '#D4A83F', '#5A3D1F');
+        break;
+      case 'forest':
+        drawLeaf(ctx, 28, 12, '#3D5A3E');
+        break;
+      case 'garden':
+        drawFlower(ctx, 18, 5, '#D4928A', '#C4714A');
+        break;
+      case 'greenhouse': {
+        // simple tropical leaf via two bezier curves
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(0, 18);
+        ctx.bezierCurveTo(20, 6, 16, -16, 0, -22);
+        ctx.bezierCurveTo(-16, -16, -20, 6, 0, 18);
+        ctx.closePath();
+        ctx.fillStyle = rgba('#5A7A5A', 0.9);
+        ctx.fill();
+        ctx.strokeStyle = COLORS.ink;
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+        ctx.strokeStyle = rgba(COLORS.ink, 0.5);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, 16);
+        ctx.lineTo(0, -20);
+        ctx.stroke();
+        ctx.restore();
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
   // Simple top-down insect silhouettes for the hangar cards.
   _drawCraftIcon(ctx, id) {
     ctx.save();
@@ -405,6 +572,79 @@ export class HiveStore {
         ctx.lineTo(4, oy);
         ctx.stroke();
       }
+    } else if (id === 'butterfly') {
+      // Four broad pale-lavender wings.
+      ctx.fillStyle = 'rgba(200,168,212,0.7)';
+      for (const side of [-1, 1]) {
+        for (const oy of [-5, 6]) {
+          ctx.beginPath();
+          ctx.ellipse(side * 9, oy, 8, 6, side * 0.3, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 4, 12, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#C8A8D4';
+      ctx.fill();
+      ctx.stroke();
+    } else if (id === 'wasp') {
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(side * 2, -2);
+        ctx.lineTo(side * 12, -5);
+        ctx.lineTo(side * 10, 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 5, 13, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#D4A020';
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = rgba(COLORS.ink, 0.9);
+      ctx.lineWidth = 1.2;
+      for (const oy of [-3, 1, 5]) {
+        ctx.beginPath();
+        ctx.moveTo(-4, oy);
+        ctx.lineTo(4, oy);
+        ctx.stroke();
+      }
+    } else if (id === 'dragonfly') {
+      // Long thin body + four wide narrow wings.
+      ctx.fillStyle = 'rgba(255,255,255,0.28)';
+      for (const side of [-1, 1]) {
+        for (const oy of [-4, 4]) {
+          ctx.beginPath();
+          ctx.ellipse(side * 12, oy, 12, 3, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 3.5, 15, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#4A9AA0';
+      ctx.fill();
+      ctx.stroke();
+    } else if (id === 'spider_craft') {
+      // Compact round body + 8 radial legs.
+      ctx.strokeStyle = COLORS.ink;
+      ctx.lineWidth = 1.2;
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(Math.cos(a) * 15, Math.sin(a) * 15);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(0, 0, 8, 0, Math.PI * 2);
+      ctx.fillStyle = '#3A3A3A';
+      ctx.fill();
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
     } else {
       ctx.fillStyle = 'rgba(120,140,90,0.45)';
       for (const side of [-1, 1]) {

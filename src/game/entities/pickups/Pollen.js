@@ -56,9 +56,10 @@ export class Pollen {
       return;
     }
 
-    // Begin collection when within radius and the bee has room.
+    // Begin collection when within radius and the craft has room (each craft's
+    // canCollect honours its own scaled capacity, incl. the pollenCapacity upgrade).
     if (
-      bee.carriedValue + this.value <= 15 &&
+      bee.canCollect(this.type) &&
       distance(this, bee) <= bee.collectionRadius
     ) {
       this._collecting = true;

@@ -92,7 +92,15 @@ export class Meadow {
       { x: 1820, y: 1910, w: 120, h: 30 },  // SE inner
     ];
 
+    this._enemyWebs = []; // SpiderEnemy impact slow zones (set by main each frame)
     this._buildDecor();
+  }
+
+  getEnemyWebZones() {
+    return this._enemyWebs || [];
+  }
+  setEnemyWebZones(zones) {
+    this._enemyWebs = zones;
   }
 
   // Stable decorative scatter (fixed seed → consistent layout).
@@ -225,6 +233,9 @@ export class Meadow {
 
   speedFactorAt(x, y) {
     for (const w of this.webZones) {
+      if (distance({ x, y }, w) <= w.radius) return 0.4;
+    }
+    for (const w of this._enemyWebs) {
       if (distance({ x, y }, w) <= w.radius) return 0.4;
     }
     return 1;

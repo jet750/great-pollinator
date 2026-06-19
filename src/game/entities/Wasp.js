@@ -1,14 +1,11 @@
-// The Hornet craft — the offensive specialist. A ranged attacker.
+// The Wasp craft — a Garden specialist. A radial burst attacker.
 //
-// Shares the Bee/Moth/Locust craft interface so main.js treats it uniformly.
-// Movement, health, landing and world-collision patterns are copied from the
-// other crafts; the combat mechanic is unique: a Projectile Sting fired in the
-// current facing direction. Projectiles fly straight, deal flat damage on the
-// first enemy they touch, and expire on hit or after travelling PROJ_RANGE.
+// Shares the craft interface (and the projectile pattern of the Hornet). Its
+// Ring Sting fires 8 projectiles outward in a full 360° ring at once: high
+// damage, but a slower fire rate than the Hornet's single-shot sting.
 //
 // Projectiles are updated/collided via updateProjectiles(dt, queryEnemies),
-// called by main.js after the entity's own update() each PLAYING frame, and
-// rendered as part of draw(ctx, t) (world transform already applied).
+// called by main.js after update() each PLAYING frame, and rendered in draw().
 
 import { StateMachine } from '../engine/StateMachine.js';
 import { COLORS, rgba } from '../utils/renderer.js';
@@ -20,28 +17,29 @@ import {
   smoothLerp,
 } from '../utils/math.js';
 
-const BASE_SPEED = 200; // px/s — between the bee and the moth
+const BASE_SPEED = 210;
 const ACCEL_LERP = 0.15;
 const FACE_LERP = 0.25;
 
-const MAX_HP = 90;
-const MAX_CARRY = 8; // pollen (count) — attack disabled above this
+const MAX_HP = 85;
+const MAX_CARRY = 7;
 
 const DR_PER_LEVEL = 0.05;
 const THORN_DAMAGE = 8;
 const HIT_IFRAME = 0.8;
 
-// Projectile Sting.
-const PROJ_SPEED = 420; // px/s
-const PROJ_DAMAGE = 45; // flat damage per hit
-const PROJ_RANGE = 350; // px before a projectile expires
-const PROJ_RADIUS = 5; // collision radius
-const PROJ_COOLDOWN = 0.5; // seconds between shots
-const TRAIL_LEN = 4; // ink-line trail points behind each projectile
+// Ring Sting.
+const RING_COUNT = 8; // projectiles per volley (45° apart)
+const PROJ_SPEED = 380; // px/s
+const PROJ_DAMAGE = 35; // flat damage per hit
+const PROJ_RANGE = 280; // px before expiry
+const PROJ_RADIUS = 4; // collision radius
+const PROJ_COOLDOWN = 1.4; // s between volleys
+const TRAIL_LEN = 3;
 
-export class Hornet {
+export class Wasp {
   constructor(x, y, upgrades = {}) {
-    this.craftType = 'hornet';
+    this.craftType = 'wasp';
     this.x = x;
     this.y = y;
     this.radius = 12;
@@ -69,14 +67,12 @@ export class Hornet {
     this.attackCooldown = 0;
     this.wingPhase = 0;
 
-    // Active projectiles: { x, y, vx, vy, distanceTraveled, active, trail[] }.
     this.projectiles = [];
 
     this.fsm = new StateMachine('FLYING', {
       FLYING: {}, INVINCIBLE: {}, LANDING: {}, LANDED: {}, DOCKED: {}, DEAD: {},
     });
 
-    // Upgrade bases. Hornet's attack is ranged (no dash) → _baseDashCooldown = 0.
     this._baseCapacity = MAX_CARRY;
     this._baseDashCooldown = 0;
     this.dashCooldownBase = 0;
@@ -181,7 +177,7 @@ export class Hornet {
 
   // ---- per-frame update ----
   update(dt, env) {
-    this.wingPhase += dt * 26; // rapid, aggressive wingbeat
+    this.wingPhase += dt * 26;
     if (this.invincibleTimer > 0) this.invincibleTimer -= dt;
     if (this.thornHitCooldown > 0) this.thornHitCooldown -= dt;
     if (this.attackCooldown > 0) this.attackCooldown -= dt;
@@ -195,7 +191,7 @@ export class Hornet {
     }
 
     if (env.healPressed) this.useHealingItem();
-    if (env.attackPressed && this.canAttack()) this._fire(env);
+    if (env.attackPressed && this.canAttack()) this._fireRing(env);
 
     const mv = env.moveVec || { x: 0, y: 0 };
     const moving = mv.x !== 0 || mv.y !== 0;
@@ -210,36 +206,31 @@ export class Hornet {
     this._applyWorld(dt, env);
   }
 
-  // Spawn a projectile from the hornet's nose in the current facing direction.
-  _fire(env) {
+  // Fire RING_COUNT projectiles evenly around a full circle.
+  _fireRing(env) {
     this.attackCooldown = PROJ_COOLDOWN;
-    const cos = Math.cos(this.facing);
-    const sin = Math.sin(this.facing);
-    const muzzle = this.radius + 6;
-    this.projectiles.push({
-      x: this.x + cos * muzzle,
-      y: this.y + sin * muzzle,
-      vx: cos * PROJ_SPEED,
-      vy: sin * PROJ_SPEED,
-      distanceTraveled: 0,
-      active: true,
-      trail: [],
-    });
-    if (env.effects) env.effects.screenShake(2, 120);
+    for (let i = 0; i < RING_COUNT; i++) {
+      const a = (i / RING_COUNT) * Math.PI * 2;
+      const cos = Math.cos(a);
+      const sin = Math.sin(a);
+      const muzzle = this.radius + 4;
+      this.projectiles.push({
+        x: this.x + cos * muzzle,
+        y: this.y + sin * muzzle,
+        vx: cos * PROJ_SPEED,
+        vy: sin * PROJ_SPEED,
+        distanceTraveled: 0,
+        active: true,
+        trail: [],
+      });
+    }
+    if (env.effects) env.effects.screenShake(3, 150);
   }
 
-  /**
-   * Move and collide every active projectile. Called by main.js each PLAYING
-   * frame after update(). `queryEnemies(x, y, r)` returns nearby live enemies
-   * via the spatial grid. Ranged hits always deal full flat damage regardless
-   * of the enemy's facing (unlike the melee crafts).
-   */
   updateProjectiles(dt, queryEnemies) {
     if (this.projectiles.length === 0) return;
     for (const p of this.projectiles) {
       if (!p.active) continue;
-
-      // Record a short fading trail behind the projectile.
       p.trail.push({ x: p.x, y: p.y });
       if (p.trail.length > TRAIL_LEN) p.trail.shift();
 
@@ -308,9 +299,8 @@ export class Hornet {
     if (!this.isDead()) this.fsm.set('FLYING', this);
   }
 
-  // ---- rendering (camera transform already applied) ----
+  // ---- rendering ----
   draw(ctx, t) {
-    // Projectiles first, in world space, under the body.
     this._drawProjectiles(ctx);
 
     const flashing = this.invincibleTimer > 0 && !this.damageImmune;
@@ -330,50 +320,44 @@ export class Hornet {
       ctx.restore();
     }
 
-    // Narrow, angular wings (sharper and tighter than the bee's).
+    // Angular swept-back wings.
     const flap = Math.sin(this.wingPhase) * 0.3;
-    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
     ctx.strokeStyle = rgba(COLORS.ink, 0.75);
     ctx.lineWidth = 1.1;
     for (const side of [-1, 1]) {
       ctx.save();
-      ctx.rotate(side * (0.45 + flap));
+      ctx.rotate(side * (0.4 + flap));
       ctx.beginPath();
       ctx.moveTo(0, -1);
-      ctx.lineTo(side * 6, -3);
-      ctx.lineTo(side * 13, 3);
-      ctx.lineTo(0, 4);
+      ctx.lineTo(side * 5, -4);
+      ctx.lineTo(side * 12, 4);
+      ctx.lineTo(0, 5);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
       ctx.restore();
     }
 
-    // Sleek elongated teardrop body (~16×30): pointed abdomen toward the tail.
+    // Narrow yellow body with 3 dark stripes.
     ctx.beginPath();
-    ctx.moveTo(0, -14); // nose
-    ctx.quadraticCurveTo(8, -8, 7, 2);
-    ctx.quadraticCurveTo(5, 14, 0, 16); // tapered stinger tail
-    ctx.quadraticCurveTo(-5, 14, -7, 2);
-    ctx.quadraticCurveTo(-8, -8, 0, -14);
-    ctx.closePath();
-    ctx.fillStyle = '#8B6914';
+    ctx.ellipse(0, 0, 5, 13, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#D4A020';
     ctx.fill();
     ctx.lineWidth = 1.4;
     ctx.strokeStyle = COLORS.ink;
     ctx.stroke();
 
-    // Thin ink-line stripes across the abdomen.
     ctx.strokeStyle = rgba(COLORS.ink, 0.9);
-    ctx.lineWidth = 1.2;
-    for (const oy of [-2, 3, 8]) {
+    ctx.lineWidth = 2;
+    for (const oy of [-4, 1, 6]) {
       ctx.beginPath();
-      ctx.moveTo(-6, oy);
-      ctx.lineTo(6, oy);
+      ctx.moveTo(-4.5, oy);
+      ctx.lineTo(4.5, oy);
       ctx.stroke();
     }
 
-    // Head + short antennae.
+    // Head + antennae.
     ctx.beginPath();
     ctx.arc(0, -12, 2.6, 0, Math.PI * 2);
     ctx.fillStyle = COLORS.ink;
@@ -383,7 +367,7 @@ export class Hornet {
     for (const side of [-1, 1]) {
       ctx.beginPath();
       ctx.moveTo(side * 1.5, -13);
-      ctx.lineTo(side * 5, -19);
+      ctx.lineTo(side * 5, -18);
       ctx.stroke();
     }
 
@@ -392,14 +376,13 @@ export class Hornet {
 
   _drawProjectiles(ctx) {
     for (const p of this.projectiles) {
-      // Fading ink-line trail behind the projectile.
       for (let i = 0; i < p.trail.length; i++) {
         const pt = p.trail[i];
         const a = ((i + 1) / (p.trail.length + 1)) * 0.5;
         ctx.save();
         ctx.globalAlpha = a;
         ctx.strokeStyle = rgba(COLORS.ink, 0.8);
-        ctx.lineWidth = 1.4;
+        ctx.lineWidth = 1.2;
         const next = i < p.trail.length - 1 ? p.trail[i + 1] : p;
         ctx.beginPath();
         ctx.moveTo(pt.x, pt.y);
@@ -407,18 +390,16 @@ export class Hornet {
         ctx.stroke();
         ctx.restore();
       }
-
-      // Small elongated teardrop (~8×4) oriented along travel direction.
       const ang = Math.atan2(p.vy, p.vx);
       ctx.save();
       ctx.translate(p.x, p.y);
       ctx.rotate(ang);
       ctx.beginPath();
-      ctx.moveTo(4, 0); // tip
+      ctx.moveTo(4, 0);
       ctx.quadraticCurveTo(0, 2, -4, 0);
       ctx.quadraticCurveTo(0, -2, 4, 0);
       ctx.closePath();
-      ctx.fillStyle = '#D4A83F';
+      ctx.fillStyle = '#D4A020';
       ctx.fill();
       ctx.lineWidth = 0.8;
       ctx.strokeStyle = rgba(COLORS.ink, 0.7);

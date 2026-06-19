@@ -19,10 +19,46 @@ const COMBO_STYLES = {
 };
 
 export const HUD = {
-  draw(ctx, { bee, banked, activePowerUp, w, h, isMobile, combo, rainActive, t = 0, muteState = false, muteBtnRect = null, modifiers = [] }) {
-    // ---- Health bar (top-left) ----
+  draw(ctx, { bee, banked, activePowerUp, w, h, isMobile, combo, rainActive, t = 0, muteState = false, muteBtnRect = null, modifiers = [], killScore = 0 }) {
+    // ---- Kill score (top-left) ----
+    ctx.save();
+    ctx.translate(22, 18);
+    // hexagon icon
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 - Math.PI / 2;
+      const px = Math.cos(a) * 9;
+      const py = Math.sin(a) * 9;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = COLORS.gold;
+    ctx.fill();
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = COLORS.ink;
+    ctx.stroke();
+    // small stinger symbol inside
+    ctx.strokeStyle = COLORS.ink;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(0, -3);
+    ctx.lineTo(0, 2.5);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, 3, 1.4, 0, Math.PI * 2);
+    ctx.fillStyle = COLORS.ink;
+    ctx.fill();
+    ctx.restore();
+    text(ctx, `${killScore}`, 36, 18, {
+      fontStr: font(FONTS.mono, 12),
+      color: COLORS.ink,
+      align: 'left',
+    });
+
+    // ---- Health bar (top-left, below the kill score) ----
     const hx = 16;
-    const hy = 26;
+    const hy = 44;
     const hw = 160;
     const hh = 16;
     text(ctx, '⬡ HP', hx, hy - 8, {

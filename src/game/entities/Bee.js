@@ -33,7 +33,6 @@ const HIT_IFRAME = 0.8; // s of invincibility after taking a hit
 
 const BASE_ATTACK = 34;
 const MAX_CARRY = 10;
-const HARD_CAP = 15;
 
 const DR_PER_LEVEL = 0.05; // damage reduction = ×0.95 per level (stacking)
 const THORN_DAMAGE = 8; // flat contact damage from thorn edges
@@ -98,6 +97,14 @@ export class Bee {
     this._dashDir = 0;
     this._dashTraveled = 0;
     this._dashHits = new Set();
+
+    // Upgrade bases (read by applyUpgrades to derive scaled stats).
+    this._baseCapacity = MAX_CARRY;
+    this._baseDashCooldown = DASH_COOLDOWN;
+    this.dashCooldownBase = DASH_COOLDOWN;
+    this.baseCollectionRadius = 60;
+    this.comboWindowBonus = 0;
+    this.applyUpgrades(upgrades);
   }
 
   // ---- derived getters ----
@@ -128,7 +135,7 @@ export class Bee {
   /** Whether there is room to begin collecting one pollen of `type`. */
   canCollect(type) {
     const value = type === 'rare' ? 5 : type === 'uncommon' ? 3 : 1;
-    return this.carriedValue + value <= HARD_CAP;
+    return this.carriedValue + value <= this.maxCarry + 5;
   }
 
   /** Recompute upgrade-derived stats from the saved upgrades object. */
@@ -138,6 +145,18 @@ export class Bee {
     this.attackLevel = upgrades.attackBoost || 0;
     this.maxHp = 100 + 10 * this.maxHpLevel;
     this.hp = Math.min(this.hp, this.maxHp);
+
+    // Pollen capacity: +5 carry value per level.
+    const capLevel = upgrades.pollenCapacity || 0;
+    this.maxCarry = this._baseCapacity + 5 * capLevel;
+    // Dash cooldown: ×0.9 per level (Forest+).
+    const dcLevel = upgrades.dashCooldown || 0;
+    this.dashCooldownBase = this._baseDashCooldown * Math.pow(0.9, dcLevel);
+    // Magnet radius: +20px per level (Garden+); main reads baseCollectionRadius.
+    const magLevel = upgrades.magnetRadius || 0;
+    this.baseCollectionRadius = 60 + 20 * magLevel;
+    // Combo-window bonus seconds (Greenhouse+); read by main each frame.
+    this.comboWindowBonus = (upgrades.comboWindow || 0) * 0.5;
   }
 
   isInvincible() {
@@ -161,7 +180,7 @@ export class Bee {
   /** Add one pollen of the given type if under the hard cap. Returns true if taken. */
   addPollen(type) {
     const value = type === 'rare' ? 5 : type === 'uncommon' ? 3 : 1;
-    if (this.carriedValue + value > HARD_CAP) return false;
+    if (this.carriedValue + value > this.maxCarry + 5) return false;
     this.carried[type] += 1;
     this.collectedCount += 1;
     // Combo multiplier adds bonus value (banked, does not consume capacity).
@@ -285,7 +304,7 @@ export class Bee {
     this._dashDir = this.facing;
     this._dashTraveled = 0;
     this._dashHits.clear();
-    this.dashCooldown = DASH_COOLDOWN;
+    this.dashCooldown = this.dashCooldownBase || DASH_COOLDOWN;
   }
 
   _updateDash(dt, env) {
@@ -321,14 +340,14 @@ export class Bee {
 
     if (isRear) {
       const dmg = enemy.dashDamage ? enemy.dashDamage(this.attackDamage, true) : this.attackDamage;
-      enemy.takeDamage(dmg, { fromDash: true });
+      enemy.takeDamage(dmg, { fromDash: true, source: 'bee' });
       this.invincibleTimer = Math.max(this.invincibleTimer, REAR_IFRAME);
       if (env.effects) env.effects.screenShake(3, 200);
     } else {
       const dmg = enemy.dashDamage
         ? enemy.dashDamage(this.attackDamage * 0.5, false)
         : this.attackDamage * 0.5;
-      enemy.takeDamage(dmg, { fromDash: true });
+      enemy.takeDamage(dmg, { fromDash: true, source: 'bee' });
       // Frontal hit: deal reduced damage to enemy but no recoil to player.
       // Player only takes damage when enemies actively hit them.
     }

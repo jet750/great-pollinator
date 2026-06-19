@@ -8,6 +8,8 @@ const STORAGE_KEYS = {
   UPGRADES: 'pollinator_upgrades',
   FOG: 'pollinator_minimap_fog',
   HIVE_RETURNS: 'pollinator_hive_returns',
+  ACTIVE_BIOME: 'pollinator_active_biome',
+  KILL_SCORE: 'pollinator_kill_score',
 };
 
 // Upgrade levels shape. All default to 0 / empty.
@@ -18,7 +20,20 @@ const DEFAULT_UPGRADES = {
   healingItems: 0, // consumables currently held, max 3
   craftsUnlocked: [], // array of unlocked craft IDs, e.g. ['moth', 'locust', 'hornet']
   activeCraft: 'bee', // currently selected craft: 'bee' | 'moth' | 'locust' | 'hornet'
+  pollenCapacity: 0, // +5 carry per level, max 20 across all biomes
+  dashCooldown: 0, // ×0.9 per level, unlocks in Forest
+  magnetRadius: 0, // +20px per level, unlocks in Garden
+  comboWindow: 0, // +0.5s per level, unlocks in Greenhouse
 };
+
+function readString(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw == null ? fallback : raw;
+  } catch {
+    return fallback;
+  }
+}
 
 function readNumber(key, fallback) {
   try {
@@ -56,6 +71,10 @@ export function loadProgress() {
     fog: readJSON(STORAGE_KEYS.FOG, []),
     // Hive-return count persists within a game session, resets on new game.
     hiveReturnCount: readNumber(STORAGE_KEYS.HIVE_RETURNS, 0),
+    // Currently selected expedition biome (drives world + craft availability).
+    activeBiome: readString(STORAGE_KEYS.ACTIVE_BIOME, 'meadow'),
+    // Lifetime kill score (persists across runs, resets on new game).
+    killScore: readNumber(STORAGE_KEYS.KILL_SCORE, 0),
   };
 }
 
@@ -76,6 +95,12 @@ export function saveProgress(data) {
     }
     if (data.hiveReturnCount != null) {
       localStorage.setItem(STORAGE_KEYS.HIVE_RETURNS, String(data.hiveReturnCount));
+    }
+    if (data.activeBiome != null) {
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_BIOME, data.activeBiome);
+    }
+    if (data.killScore != null) {
+      localStorage.setItem(STORAGE_KEYS.KILL_SCORE, String(data.killScore));
     }
   } catch {
     // Storage full or blocked — fail silently, the run continues in memory.
