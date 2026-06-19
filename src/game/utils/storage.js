@@ -5,6 +5,7 @@
 const STORAGE_KEYS = {
   HIGH_SCORE: 'pollinator_highscore',
   TOTAL_BANKED: 'pollinator_total_banked',
+  TOTAL_EVER_BANKED: 'pollinator_total_ever_banked',
   UPGRADES: 'pollinator_upgrades',
   FOG: 'pollinator_minimap_fog',
   HIVE_RETURNS: 'pollinator_hive_returns',
@@ -90,6 +91,13 @@ export function loadProgress() {
   return {
     highScore: readNumber(STORAGE_KEYS.HIGH_SCORE, 0),
     totalBanked: readNumber(STORAGE_KEYS.TOTAL_BANKED, 0),
+    // Lifetime pollen ever banked — only ever increases (never spent down), so
+    // it gates biome unlocks as a permanent milestone. Default 0; clamped up to
+    // the current balance so pre-existing saves don't re-lock already-earned biomes.
+    totalEverBanked: Math.max(
+      readNumber(STORAGE_KEYS.TOTAL_EVER_BANKED, 0),
+      readNumber(STORAGE_KEYS.TOTAL_BANKED, 0),
+    ),
     upgrades,
     // Fog is stored as an array of {x,y} world points the player has visited.
     fog: readJSON(STORAGE_KEYS.FOG, []),
@@ -110,6 +118,9 @@ export function saveProgress(data) {
     }
     if (data.totalBanked != null) {
       localStorage.setItem(STORAGE_KEYS.TOTAL_BANKED, String(data.totalBanked));
+    }
+    if (data.totalEverBanked != null) {
+      localStorage.setItem(STORAGE_KEYS.TOTAL_EVER_BANKED, String(data.totalEverBanked));
     }
     if (data.upgrades != null) {
       localStorage.setItem(STORAGE_KEYS.UPGRADES, JSON.stringify(data.upgrades));

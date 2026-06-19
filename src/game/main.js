@@ -1262,7 +1262,7 @@ export default class PollinatorGame {
       this._switchCraft(intent.data);
     } else if (intent.action === 'switch-biome') {
       const newBiome = intent.data;
-      if (isBiomeUnlocked(newBiome, this.progress.totalBanked)) {
+      if (isBiomeUnlocked(newBiome, this.progress.totalEverBanked)) {
         this.progress.activeBiome = newBiome;
         this.activeBiome = newBiome; // reflect in the store UI immediately
         this._save();
@@ -1300,6 +1300,8 @@ export default class PollinatorGame {
     const mult = this._pollenModTimer > 0 ? this._pollenMultiplier : 1;
     const amount = Math.round(base * mult);
     this.progress.totalBanked += amount;
+    // Lifetime tally — never decremented by spending; gates biome unlocks.
+    this.progress.totalEverBanked += amount;
     this.runBanked += amount;
     this.bee.clearCarried();
     if (this.runBanked > this.progress.highScore) {
@@ -1374,6 +1376,7 @@ export default class PollinatorGame {
     saveProgress({
       highScore: this.progress.highScore,
       totalBanked: this.progress.totalBanked,
+      totalEverBanked: this.progress.totalEverBanked,
       upgrades: this.progress.upgrades,
       hiveReturnCount: this.hiveReturnCount,
       killScore: this.progress.killScore,
@@ -1500,6 +1503,7 @@ export default class PollinatorGame {
       this.store.draw(ctx, {
         bee: this.bee,
         banked: this.progress.totalBanked,
+        everBanked: this.progress.totalEverBanked,
         upgrades: this.progress.upgrades,
         craftUpgrades: this._craftUpgrades(),
         w: this.LW,

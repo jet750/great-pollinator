@@ -67,7 +67,7 @@ export class HiveStore {
     return null;
   }
 
-  draw(ctx, { bee, banked, upgrades, craftUpgrades = {}, w, h, isMobile, activeBiome = 'meadow' }) {
+  draw(ctx, { bee, banked, everBanked = banked, upgrades, craftUpgrades = {}, w, h, isMobile, activeBiome = 'meadow' }) {
     this._buttons = [];
 
     // dim backdrop
@@ -115,7 +115,7 @@ export class HiveStore {
     if (this.tab === 'BANK') this._drawBank(ctx, { bee, banked, px, py, pw, ph, contentY });
     else if (this.tab === 'STORE') this._drawStore(ctx, { bee, banked, upgrades, craftUpgrades, px, pw, contentY, activeBiome });
     else if (this.tab === 'HANGAR') this._drawHangar(ctx, { banked, upgrades, px, py, pw, ph, contentY, activeBiome });
-    else this._drawBiomes(ctx, { banked, activeBiome, px, py, pw, ph, contentY });
+    else this._drawBiomes(ctx, { banked, everBanked, activeBiome, px, py, pw, ph, contentY });
 
     // ---- Fly Out button ----
     const exitW = 140;
@@ -423,7 +423,7 @@ export class HiveStore {
     return true;
   }
 
-  _drawBiomes(ctx, { banked, activeBiome, px, py, pw, ph, contentY }) {
+  _drawBiomes(ctx, { banked, everBanked = banked, activeBiome, px, py, pw, ph, contentY }) {
     const cx = px + pw / 2;
     text(ctx, 'CHOOSE YOUR EXPEDITION', cx, contentY + 6, {
       fontStr: font(FONTS.body, 12, '700'),
@@ -450,7 +450,9 @@ export class HiveStore {
       const cardX = gridX + col * (cardW + gap);
       const cardY = gridY + row * (cardH + gap);
       const isActive = activeBiome === id;
-      const unlocked = isBiomeUnlocked(id, banked);
+      // Biome unlocks gate on lifetime banked (a permanent milestone), so
+      // spending pollen on upgrades never re-locks an already-earned biome.
+      const unlocked = isBiomeUnlocked(id, everBanked);
 
       panel(ctx, cardX, cardY, cardW, cardH, {
         fill: isActive ? rgba(COLORS.gold, 0.12) : rgba(COLORS.ink, 0.03),
