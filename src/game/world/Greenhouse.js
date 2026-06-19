@@ -19,7 +19,6 @@ const RAIN_WARNING = 3.0;
 // Greenhouse palette.
 const JADE = '#5A7A5A';
 const GLASS = '#B8D4C8';
-const SHADOW = '#2A3A2A';
 
 export class Greenhouse {
   constructor() {
@@ -52,32 +51,32 @@ export class Greenhouse {
       warningTimer: 0,
     };
 
-    // Dense climbing-vine walls — quadrant ring + mid ring + inner ring with
-    // ~150px gaps, scaled for the 8000×8000 world (20 segments).
+    // Asymmetric grid chambers — claustrophobic, irregular room-like spaces.
     this.thorns = [
-      // Outer ring (gaps near the cardinal midpoints)
-      { x: 1000, y: 2000, w: 2850, h: 60 },
-      { x: 4150, y: 2000, w: 2850, h: 60 },
-      { x: 1000, y: 5940, w: 2850, h: 60 },
-      { x: 4150, y: 5940, w: 2850, h: 60 },
-      { x: 2000, y: 1000, w: 60, h: 2850 },
-      { x: 2000, y: 4150, w: 60, h: 2850 },
-      { x: 5940, y: 1000, w: 60, h: 2850 },
-      { x: 5940, y: 4150, w: 60, h: 2850 },
-      // Mid ring
-      { x: 2800, y: 3100, w: 900, h: 50 },
-      { x: 4300, y: 3100, w: 900, h: 50 },
-      { x: 2800, y: 4850, w: 900, h: 50 },
-      { x: 4300, y: 4850, w: 900, h: 50 },
-      { x: 3100, y: 2800, w: 50, h: 900 },
-      { x: 4850, y: 2800, w: 50, h: 900 },
-      { x: 3100, y: 4300, w: 50, h: 900 },
-      { x: 4850, y: 4300, w: 50, h: 900 },
-      // Inner ring around the hive
-      { x: 3400, y: 3450, w: 220, h: 45 },
-      { x: 4380, y: 3450, w: 220, h: 45 },
-      { x: 3400, y: 4505, w: 220, h: 45 },
-      { x: 4380, y: 4505, w: 220, h: 45 },
+      // Horizontal dividers — irregular spacing
+      { x: 400,  y: 2000, w: 3200, h: 60 },
+      { x: 4400, y: 2000, w: 3200, h: 60 },
+      { x: 800,  y: 4000, w: 2800, h: 60 },
+      { x: 4400, y: 4200, w: 3000, h: 60 },
+      { x: 400,  y: 6000, w: 3400, h: 60 },
+      { x: 4200, y: 5800, w: 3400, h: 60 },
+      // Vertical dividers — offset to create irregular rooms
+      { x: 2000, y: 400,  w: 60,   h: 1400 },
+      { x: 2000, y: 2200, w: 60,   h: 1600 },
+      { x: 4000, y: 600,  w: 60,   h: 1200 },
+      { x: 6000, y: 2200, w: 60,   h: 1600 },
+      { x: 2200, y: 4200, w: 60,   h: 1400 },
+      { x: 5800, y: 4400, w: 60,   h: 1400 },
+      { x: 3800, y: 6000, w: 60,   h: 1600 },
+      // Inner chamber walls near hive
+      { x: 3200, y: 3200, w: 400,  h: 50 },
+      { x: 4400, y: 3200, w: 400,  h: 50 },
+      { x: 3200, y: 4750, w: 400,  h: 50 },
+      { x: 4400, y: 4750, w: 400,  h: 50 },
+      { x: 3200, y: 3200, w: 50,   h: 400 },
+      { x: 4750, y: 3200, w: 50,   h: 400 },
+      { x: 3200, y: 4350, w: 50,   h: 400 },
+      { x: 4750, y: 4350, w: 50,   h: 400 },
     ];
 
     this._enemyWebs = [];
@@ -99,14 +98,14 @@ export class Greenhouse {
       });
     }
     this.decor = [];
-    for (let i = 0; i < 600; i++) {
-      const r = rng();
+    const drng = makeRng(77);
+    for (let i = 0; i < 120; i++) {
       this.decor.push({
-        x: rng() * WORLD_SIZE,
-        y: rng() * WORLD_SIZE,
-        type: r < 0.62 ? 'leaf' : 'droplet',
-        rot: rng() * Math.PI * 2,
-        scale: 0.7 + rng() * 1.0,
+        type: drng() < 0.5 ? 'leaf' : 'drop',
+        x: drng() * WORLD_SIZE,
+        y: drng() * WORLD_SIZE,
+        rot: drng() * Math.PI * 2,
+        scale: 0.6 + drng() * 1.0,
       });
     }
   }
@@ -244,41 +243,49 @@ export class Greenhouse {
 
   // ---- rendering ----
   drawTerrain(ctx, camera) {
-    ctx.fillStyle = SHADOW;
-    ctx.fillRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+    // Dark humid floor — wet stone / peat
+    ctx.fillStyle = '#1A2A1A';
+    ctx.fillRect(0, 0, this.WORLD_SIZE, this.WORLD_SIZE);
 
-    for (const b of this.washes) {
-      if (!camera.isVisible(b.x, b.y, b.rx + b.ry, 40)) continue;
-      washBlob(ctx, b.x, b.y, b.rx, b.ry, b.color, b.alpha, b.rot);
+    // Glass panel grid — faint bright lines suggesting greenhouse roof panels
+    ctx.strokeStyle = 'rgba(160,210,180,0.08)';
+    ctx.lineWidth = 1;
+    const PANEL = 400;
+    for (let gx = 0; gx < this.WORLD_SIZE; gx += PANEL) {
+      if (!camera.isVisible(gx, 0, PANEL, this.WORLD_SIZE)) continue;
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, this.WORLD_SIZE); ctx.stroke();
+    }
+    for (let gy = 0; gy < this.WORLD_SIZE; gy += PANEL) {
+      if (!camera.isVisible(0, gy, this.WORLD_SIZE, PANEL)) continue;
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(this.WORLD_SIZE, gy); ctx.stroke();
     }
 
+    // Tropical leaf wash blobs
+    for (const b of this.washes) {
+      if (!camera.isVisible(b.x, b.y, b.rx + b.ry, 40)) continue;
+      washBlob(ctx, b.x, b.y, b.rx, b.ry, '#2A5A3A', 0.22, b.rot);
+    }
+    // Condensation droplets + large leaf decor
     for (const d of this.decor) {
-      if (!camera.isVisible(d.x, d.y, 50, 50)) continue;
+      if (!camera.isVisible(d.x, d.y, 40, 40)) continue;
       ctx.save();
       ctx.translate(d.x, d.y);
-      ctx.rotate(d.rot);
-      ctx.scale(d.scale, d.scale);
-      if (d.type === 'leaf') {
-        drawLeaf(ctx, 26, 12, JADE);
-      } else {
-        // condensation droplet on the "glass"
-        ctx.globalAlpha = 0.35;
-        ctx.fillStyle = GLASS;
+      if (d.type === 'drop') {
         ctx.beginPath();
-        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+        ctx.arc(0, 0, 2 * d.scale, 0, Math.PI * 2);
+        ctx.fillStyle = rgba('#80C0A0', 0.35);
         ctx.fill();
-        ctx.strokeStyle = rgba(GLASS, 0.5);
-        ctx.lineWidth = 0.8;
-        ctx.beginPath();
-        ctx.arc(0, 0, 5, -Math.PI * 0.8, -Math.PI * 0.2);
-        ctx.stroke();
+      } else {
+        ctx.rotate(d.rot);
+        ctx.scale(d.scale, d.scale);
+        drawLeaf(ctx, 28, 12, '#2A5A2A');
       }
       ctx.restore();
     }
 
     ctx.strokeStyle = rgba(GLASS, 0.4);
     ctx.lineWidth = 6;
-    ctx.strokeRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+    ctx.strokeRect(0, 0, this.WORLD_SIZE, this.WORLD_SIZE);
   }
 
   drawHazards(ctx, camera /* , t */) {
@@ -286,10 +293,10 @@ export class Greenhouse {
     for (const th of this.thorns) {
       if (!camera.isVisible(th.x + th.w / 2, th.y + th.h / 2, Math.max(th.w, th.h), 20)) continue;
       ctx.save();
-      ctx.fillStyle = '#1E2A1E';
+      ctx.fillStyle = '#2A4A20';
       ctx.fillRect(th.x, th.y, th.w, th.h);
       // thick vine border
-      ctx.strokeStyle = rgba(JADE, 0.9);
+      ctx.strokeStyle = '#4A8A40';
       ctx.lineWidth = 4;
       ctx.strokeRect(th.x, th.y, th.w, th.h);
       // climbing-vine tendrils along the long axis

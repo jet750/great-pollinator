@@ -152,9 +152,9 @@ export class Bee {
     // Dash cooldown: ×0.9 per level (Forest+).
     const dcLevel = upgrades.dashCooldown || 0;
     this.dashCooldownBase = this._baseDashCooldown * Math.pow(0.9, dcLevel);
-    // Magnet radius: +20px per level (Garden+); main reads baseCollectionRadius.
+    // Magnet radius: +8px per level (Garden+); main reads baseCollectionRadius.
     const magLevel = upgrades.magnetRadius || 0;
-    this.baseCollectionRadius = 60 + 20 * magLevel;
+    this.baseCollectionRadius = 60 + 8 * magLevel;
     // Combo-window bonus seconds (Greenhouse+); read by main each frame.
     this.comboWindowBonus = (upgrades.comboWindow || 0) * 0.5;
   }

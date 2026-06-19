@@ -5,6 +5,7 @@
 const STORAGE_KEYS = {
   HIGH_SCORE: 'pollinator_highscore',
   TOTAL_BANKED: 'pollinator_total_banked',
+  TOTAL_EVER_BANKED: 'pollinator_total_ever_banked',
   UPGRADES: 'pollinator_upgrades',
   FOG: 'pollinator_minimap_fog',
   HIVE_RETURNS: 'pollinator_hive_returns',
@@ -12,18 +13,27 @@ const STORAGE_KEYS = {
   KILL_SCORE: 'pollinator_kill_score',
 };
 
-// Upgrade levels shape. All default to 0 / empty.
+// Upgrade levels shape. Every craft now has its own independent upgrade levels.
+const CRAFT_IDS = ['bee', 'moth', 'locust', 'hornet', 'butterfly', 'wasp', 'dragonfly', 'spider_craft'];
+
+function defaultCraftUpgrades() {
+  return {
+    maxHp: 0,
+    damageReduction: 0,
+    attackBoost: 0,
+    pollenCapacity: 0,
+    dashCooldown: 0,
+    magnetRadius: 0,
+    comboWindow: 0,
+    healingItems: 0,
+  };
+}
+
 const DEFAULT_UPGRADES = {
-  maxHp: 0, // +10 HP per level, max 5 (cap 150)
-  damageReduction: 0, // ×0.95 per level, max 5
-  attackBoost: 0, // +0.05 per level, max 5 (cap ×1.25)
-  healingItems: 0, // consumables currently held, max 3
-  craftsUnlocked: [], // array of unlocked craft IDs, e.g. ['moth', 'locust', 'hornet']
-  activeCraft: 'bee', // currently selected craft: 'bee' | 'moth' | 'locust' | 'hornet'
-  pollenCapacity: 0, // +5 carry per level, max 20 across all biomes
-  dashCooldown: 0, // ×0.9 per level, unlocks in Forest
-  magnetRadius: 0, // +20px per level, unlocks in Garden
-  comboWindow: 0, // +0.5s per level, unlocks in Greenhouse
+  craftsUnlocked: [],
+  activeCraft: 'bee',
+  // Per-craft upgrade levels — each craft has its own independent levels
+  crafts: Object.fromEntries(CRAFT_IDS.map(id => [id, defaultCraftUpgrades()])),
 };
 
 function readString(key, fallback) {
@@ -63,9 +73,31 @@ export function loadProgress() {
   // Defensive: ensure the craft fields keep their expected shapes.
   if (!Array.isArray(upgrades.craftsUnlocked)) upgrades.craftsUnlocked = [];
   if (typeof upgrades.activeCraft !== 'string') upgrades.activeCraft = 'bee';
+  // Ensure crafts sub-object exists with defaults for all craft IDs
+  if (!upgrades.crafts || typeof upgrades.crafts !== 'object') upgrades.crafts = {};
+  for (const id of CRAFT_IDS) {
+    if (!upgrades.crafts[id]) upgrades.crafts[id] = defaultCraftUpgrades();
+  }
+  // Backward compatibility: migrate legacy flat upgrade fields into the bee's
+  // craft entry (these existed before per-craft upgrades were introduced).
+  const LEGACY_FIELDS = ['maxHp','damageReduction','attackBoost','pollenCapacity','dashCooldown','magnetRadius','comboWindow','healingItems'];
+  const hasLegacy = LEGACY_FIELDS.some(f => upgrades[f] != null && upgrades[f] !== 0);
+  if (hasLegacy) {
+    for (const f of LEGACY_FIELDS) {
+      if (upgrades[f] != null) upgrades.crafts.bee[f] = upgrades[f];
+    }
+    LEGACY_FIELDS.forEach(f => delete upgrades[f]);
+  }
   return {
     highScore: readNumber(STORAGE_KEYS.HIGH_SCORE, 0),
     totalBanked: readNumber(STORAGE_KEYS.TOTAL_BANKED, 0),
+    // Lifetime pollen ever banked — only ever increases (never spent down), so
+    // it gates biome unlocks as a permanent milestone. Default 0; clamped up to
+    // the current balance so pre-existing saves don't re-lock already-earned biomes.
+    totalEverBanked: Math.max(
+      readNumber(STORAGE_KEYS.TOTAL_EVER_BANKED, 0),
+      readNumber(STORAGE_KEYS.TOTAL_BANKED, 0),
+    ),
     upgrades,
     // Fog is stored as an array of {x,y} world points the player has visited.
     fog: readJSON(STORAGE_KEYS.FOG, []),
@@ -86,6 +118,9 @@ export function saveProgress(data) {
     }
     if (data.totalBanked != null) {
       localStorage.setItem(STORAGE_KEYS.TOTAL_BANKED, String(data.totalBanked));
+    }
+    if (data.totalEverBanked != null) {
+      localStorage.setItem(STORAGE_KEYS.TOTAL_EVER_BANKED, String(data.totalEverBanked));
     }
     if (data.upgrades != null) {
       localStorage.setItem(STORAGE_KEYS.UPGRADES, JSON.stringify(data.upgrades));

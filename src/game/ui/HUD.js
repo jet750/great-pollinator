@@ -19,7 +19,19 @@ const COMBO_STYLES = {
 };
 
 export const HUD = {
-  draw(ctx, { bee, banked, activePowerUp, w, h, isMobile, combo, rainActive, t = 0, muteState = false, muteBtnRect = null, modifiers = [], killScore = 0 }) {
+  draw(ctx, { bee, banked, activePowerUp, w, h, isMobile, combo, rainActive, t = 0, muteState = false, muteBtnRect = null, modifiers = [], killScore = 0, activeBiome = 'meadow' }) {
+    // Dark biomes (Forest, Greenhouse) use a near-black terrain, against which
+    // the ink-colored HUD text becomes unreadable. Lay a semi-transparent light
+    // backdrop behind the top-left HUD cluster to restore contrast.
+    const darkBiome = activeBiome === 'forest' || activeBiome === 'greenhouse';
+    if (darkBiome) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(240,235,226,0.15)';
+      roundRectPath(ctx, 6, 6, 220, 90, 8);
+      ctx.fill();
+      ctx.restore();
+    }
+
     // ---- Kill score (top-left) ----
     ctx.save();
     ctx.translate(22, 18);

@@ -8,7 +8,6 @@ import {
   rgba,
   washBlob,
   drawFlower,
-  drawLeaf,
   drawPulseRing,
 } from '../utils/renderer.js';
 import { makeRng, clamp, distance } from '../utils/math.js';
@@ -20,7 +19,6 @@ const RAIN_WARNING = 3.0;
 // Forest palette.
 const MOSS = '#3D5A3E';
 const AMBER = '#C4714A';
-const PARCH = '#D9CFC4';
 
 export class Forest {
   constructor() {
@@ -61,25 +59,27 @@ export class Forest {
       warningTimer: 0,
     };
 
-    // Dense forest walls with narrow chokepoints (≈150px gaps).
+    // Diagonal barrier system — angled corridors rather than orthogonal walls.
     this.thorns = [
-      // North wall — gap at x≈2300–2450
-      { x: 600, y: 1200, w: 1700, h: 50 },
-      { x: 2450, y: 1200, w: 1750, h: 50 },
-      // South wall
-      { x: 600, y: 3550, w: 1700, h: 50 },
-      { x: 2450, y: 3550, w: 1750, h: 50 },
-      // West wall — gap at y≈2300–2450
-      { x: 1200, y: 600, w: 50, h: 1700 },
-      { x: 1200, y: 2450, w: 50, h: 1700 },
-      // East wall
-      { x: 3550, y: 600, w: 50, h: 1700 },
-      { x: 3550, y: 2450, w: 50, h: 1700 },
-      // Inner ring around the hive
-      { x: 1900, y: 1900, w: 160, h: 40 },
-      { x: 2740, y: 1900, w: 160, h: 40 },
-      { x: 1900, y: 2860, w: 160, h: 40 },
-      { x: 2740, y: 2860, w: 160, h: 40 },
+      // NW–SE diagonal zone — creates a forced diagonal passage through the forest
+      { x: 600,  y: 600,  w: 600, h: 50 },
+      { x: 1200, y: 1200, w: 600, h: 50 },
+      { x: 2800, y: 600,  w: 50,  h: 600 },
+      { x: 3200, y: 1200, w: 50,  h: 600 },
+      // Central ring — tighter than Meadow
+      { x: 1600, y: 1100, w: 50,  h: 600 },
+      { x: 3150, y: 1100, w: 50,  h: 600 },
+      { x: 1100, y: 1600, w: 600, h: 50 },
+      { x: 1100, y: 3150, w: 600, h: 50 },
+      { x: 3500, y: 1600, w: 600, h: 50 },
+      { x: 3500, y: 3150, w: 600, h: 50 },
+      { x: 1600, y: 3500, w: 50,  h: 600 },
+      { x: 3150, y: 3500, w: 50,  h: 600 },
+      // Scattered interior blockers
+      { x: 2200, y: 1800, w: 200, h: 50 },
+      { x: 2200, y: 2950, w: 200, h: 50 },
+      { x: 1800, y: 2200, w: 50,  h: 200 },
+      { x: 2950, y: 2200, w: 50,  h: 200 },
     ];
 
     this._enemyWebs = []; // SpiderEnemy impact slow zones (set by main each frame)
@@ -100,16 +100,16 @@ export class Forest {
         alpha: 0.05 + rng() * 0.07,
       });
     }
+    // Forest decor: roots and simple tree icons
     this.decor = [];
-    for (let i = 0; i < 320; i++) {
-      const r = rng();
+    const drng = makeRng(42);
+    for (let i = 0; i < 80; i++) {
       this.decor.push({
-        x: rng() * WORLD_SIZE,
-        y: rng() * WORLD_SIZE,
-        type: r < 0.7 ? 'leaf' : 'root',
-        rot: rng() * Math.PI * 2,
-        scale: 0.7 + rng() * 0.9,
-        len: 30 + rng() * 50,
+        type: drng() < 0.4 ? 'tree' : 'root',
+        x: drng() * WORLD_SIZE,
+        y: drng() * WORLD_SIZE,
+        rot: drng() * Math.PI * 2,
+        scale: 0.7 + drng() * 0.8,
       });
     }
   }
@@ -247,42 +247,46 @@ export class Forest {
 
   // ---- rendering ----
   drawTerrain(ctx, camera) {
-    ctx.fillStyle = PARCH;
-    ctx.fillRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+    // Dark loamy soil base
+    ctx.fillStyle = '#2C1F14';
+    ctx.fillRect(0, 0, this.WORLD_SIZE, this.WORLD_SIZE);
 
+    // Mossy patches — dark green wash blobs
     for (const b of this.washes) {
       if (!camera.isVisible(b.x, b.y, b.rx + b.ry, 40)) continue;
-      washBlob(ctx, b.x, b.y, b.rx, b.ry, b.color, b.alpha, b.rot);
+      washBlob(ctx, b.x, b.y, b.rx, b.ry, '#3D5A2A', 0.18, b.rot);
     }
-
+    // Root-line texture: horizontal dark streaks
+    ctx.strokeStyle = 'rgba(20,12,6,0.35)';
+    ctx.lineWidth = 2;
     for (const d of this.decor) {
-      if (!camera.isVisible(d.x, d.y, 50, 50)) continue;
-      ctx.save();
-      ctx.translate(d.x, d.y);
-      ctx.rotate(d.rot);
-      ctx.scale(d.scale, d.scale);
-      if (d.type === 'leaf') {
-        drawLeaf(ctx, 22, 9, MOSS);
-      } else {
-        // gnarled root line — a meandering arc stroke
-        ctx.strokeStyle = rgba('#4A3520', 0.5);
-        ctx.lineWidth = 2.4;
-        ctx.lineCap = 'round';
+      if (!camera.isVisible(d.x, d.y, 40, 40)) continue;
+      if (d.type === 'root') {
+        ctx.save();
+        ctx.translate(d.x, d.y);
+        ctx.rotate(d.rot);
         ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.quadraticCurveTo(d.len * 0.4, -d.len * 0.3, d.len * 0.2, -d.len);
+        ctx.moveTo(-d.scale * 20, 0);
+        ctx.bezierCurveTo(-d.scale * 8, -d.scale * 6, d.scale * 8, d.scale * 4, d.scale * 22, 0);
         ctx.stroke();
+        ctx.restore();
+      } else if (d.type === 'tree') {
+        // Simple tree icon: trunk rectangle + circle canopy
+        ctx.save();
+        ctx.translate(d.x, d.y);
+        ctx.fillStyle = '#4A2E0A';
+        ctx.fillRect(-4 * d.scale, 0, 8 * d.scale, 18 * d.scale);
         ctx.beginPath();
-        ctx.moveTo(d.len * 0.2, -d.len * 0.5);
-        ctx.quadraticCurveTo(d.len * 0.6, -d.len * 0.4, d.len, -d.len * 0.7);
-        ctx.stroke();
+        ctx.arc(0, -12 * d.scale, 16 * d.scale, 0, Math.PI * 2);
+        ctx.fillStyle = rgba('#2A4A18', 0.7);
+        ctx.fill();
+        ctx.restore();
       }
-      ctx.restore();
     }
 
     ctx.strokeStyle = rgba(COLORS.ink, 0.55);
     ctx.lineWidth = 6;
-    ctx.strokeRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+    ctx.strokeRect(0, 0, this.WORLD_SIZE, this.WORLD_SIZE);
   }
 
   drawHazards(ctx, camera, t) {
@@ -316,8 +320,8 @@ export class Forest {
     for (const th of this.thorns) {
       if (!camera.isVisible(th.x + th.w / 2, th.y + th.h / 2, Math.max(th.w, th.h), 20)) continue;
       ctx.save();
-      ctx.fillStyle = '#2A3320';
-      ctx.strokeStyle = COLORS.ink;
+      ctx.fillStyle = '#3A2010';
+      ctx.strokeStyle = '#5A3A1A';
       ctx.lineWidth = 1.5;
       ctx.fillRect(th.x, th.y, th.w, th.h);
       ctx.strokeRect(th.x, th.y, th.w, th.h);

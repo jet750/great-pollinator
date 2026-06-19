@@ -18,7 +18,6 @@ const RAIN_WARNING = 3.0;
 // Garden palette.
 const ROSE = '#D4928A';
 const TERRA = '#C4714A';
-const CREAM = '#F5F0E8';
 
 export class Garden {
   constructor() {
@@ -50,26 +49,26 @@ export class Garden {
       warningTimer: 0,
     };
 
-    // Formal garden hedgerows: outer ring + mid ring with 150px gaps.
+    // Formal concentric hedge rings with deliberate entry gaps.
     this.thorns = [
-      // Outer ring (far from hive)
-      { x: 800, y: 1600, w: 2200, h: 55 },
-      { x: 3150, y: 1600, w: 2450, h: 55 },
-      { x: 800, y: 4745, w: 2200, h: 55 },
-      { x: 3150, y: 4745, w: 2450, h: 55 },
-      { x: 1600, y: 800, w: 55, h: 2200 },
-      { x: 1600, y: 3150, w: 55, h: 2450 },
-      { x: 4745, y: 800, w: 55, h: 2200 },
-      { x: 4745, y: 3150, w: 55, h: 2450 },
-      // Mid ring (closer to hive)
-      { x: 2200, y: 2500, w: 700, h: 40 },
-      { x: 3500, y: 2500, w: 700, h: 40 },
-      { x: 2200, y: 3860, w: 700, h: 40 },
-      { x: 3500, y: 3860, w: 700, h: 40 },
-      { x: 2500, y: 2200, w: 40, h: 700 },
-      { x: 3860, y: 2200, w: 40, h: 700 },
-      { x: 2500, y: 3500, w: 40, h: 700 },
-      { x: 3860, y: 3500, w: 40, h: 700 },
+      // Outer ring (gap North at x≈3050–3350, South at x≈3050–3350, East at y≈3050–3350, West at y≈3050–3350)
+      { x: 800,  y: 800,  w: 2250, h: 55 },  // N top segment
+      { x: 3350, y: 800,  w: 2250, h: 55 },  // N bot segment
+      { x: 800,  y: 5545, w: 2250, h: 55 },
+      { x: 3350, y: 5545, w: 2250, h: 55 },
+      { x: 800,  y: 800,  w: 55,   h: 2250 },
+      { x: 800,  y: 3350, w: 55,   h: 2250 },
+      { x: 5545, y: 800,  w: 55,   h: 2250 },
+      { x: 5545, y: 3350, w: 55,   h: 2250 },
+      // Mid ring (tighter, gap on West and East)
+      { x: 1800, y: 1800, w: 1100, h: 45 },
+      { x: 3100, y: 1800, w: 1100, h: 45 },
+      { x: 1800, y: 4555, w: 1100, h: 45 },
+      { x: 3100, y: 4555, w: 1100, h: 45 },
+      { x: 1800, y: 1800, w: 45,   h: 1100 },
+      { x: 1800, y: 3100, w: 45,   h: 1100 },
+      { x: 4555, y: 1800, w: 45,   h: 1100 },
+      { x: 4555, y: 3100, w: 45,   h: 1100 },
     ];
 
     this._enemyWebs = [];
@@ -236,45 +235,39 @@ export class Garden {
 
   // ---- rendering ----
   drawTerrain(ctx, camera) {
-    ctx.fillStyle = CREAM;
-    ctx.fillRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+    // Warm terracotta-cream base — cultivated soil
+    ctx.fillStyle = '#E8D8C4';
+    ctx.fillRect(0, 0, this.WORLD_SIZE, this.WORLD_SIZE);
 
+    // Blush rose wash blobs
     for (const b of this.washes) {
       if (!camera.isVisible(b.x, b.y, b.rx + b.ry, 40)) continue;
-      washBlob(ctx, b.x, b.y, b.rx, b.ry, b.color, b.alpha, b.rot);
+      washBlob(ctx, b.x, b.y, b.rx, b.ry, '#C4826A', 0.12, b.rot);
     }
-
+    // Trellis lines — thin parallel diagonal strokes
+    ctx.strokeStyle = 'rgba(140,90,60,0.18)';
+    ctx.lineWidth = 1;
+    for (let i = -20; i < this.WORLD_SIZE / 120 + 20; i++) {
+      const sx = i * 120;
+      if (!camera.isVisible(sx, 0, 120, this.WORLD_SIZE)) continue;
+      ctx.beginPath();
+      ctx.moveTo(sx, 0);
+      ctx.lineTo(sx + this.WORLD_SIZE * 0.15, this.WORLD_SIZE);
+      ctx.stroke();
+    }
+    // Small rose-bud cluster decor
     for (const d of this.decor) {
-      if (!camera.isVisible(d.x, d.y, 50, 50)) continue;
+      if (!camera.isVisible(d.x, d.y, 30, 30)) continue;
       ctx.save();
       ctx.translate(d.x, d.y);
-      ctx.rotate(d.rot);
       ctx.scale(d.scale, d.scale);
-      if (d.type === 'rose') {
-        drawFlower(ctx, 9, 5, ROSE, TERRA);
-      } else {
-        // trellis: a small lattice of parallel strokes
-        ctx.strokeStyle = rgba('#7A8A5A', 0.4);
-        ctx.lineWidth = 1.4;
-        for (let i = -2; i <= 2; i++) {
-          ctx.beginPath();
-          ctx.moveTo(i * 6, -18);
-          ctx.lineTo(i * 6, 18);
-          ctx.stroke();
-        }
-        for (let i = -2; i <= 2; i++) {
-          ctx.beginPath();
-          ctx.moveTo(-18, i * 6);
-          ctx.lineTo(18, i * 6);
-          ctx.stroke();
-        }
-      }
+      drawFlower(ctx, 9, 5, '#D4826A', '#C06040');
       ctx.restore();
     }
 
     ctx.strokeStyle = rgba(COLORS.ink, 0.55);
     ctx.lineWidth = 6;
-    ctx.strokeRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+    ctx.strokeRect(0, 0, this.WORLD_SIZE, this.WORLD_SIZE);
   }
 
   drawHazards(ctx, camera /* , t */) {
@@ -282,8 +275,8 @@ export class Garden {
     for (const th of this.thorns) {
       if (!camera.isVisible(th.x + th.w / 2, th.y + th.h / 2, Math.max(th.w, th.h), 20)) continue;
       ctx.save();
-      ctx.fillStyle = '#5A6B3A'; // hedge green
-      ctx.strokeStyle = COLORS.ink;
+      ctx.fillStyle = '#4A6A28'; // trimmed hedgerow
+      ctx.strokeStyle = '#2A4A18';
       ctx.lineWidth = 1.5;
       ctx.fillRect(th.x, th.y, th.w, th.h);
       ctx.strokeRect(th.x, th.y, th.w, th.h);

@@ -39,10 +39,12 @@ export class HiveStore {
   constructor() {
     this.tab = 'BANK';
     this._buttons = [];
+    this._hangarPage = 0;
   }
 
   open() {
     this.tab = 'BANK';
+    this._hangarPage = 0;
   }
 
   _btn(id, x, y, w, h, data) {
@@ -57,13 +59,15 @@ export class HiveStore {
           this.tab = b.data;
           return { action: 'tab', tab: b.data };
         }
+        if (b.id === 'hangar-prev') { this._hangarPage = Math.max(0, this._hangarPage - 1); return { action: 'tab', tab: 'HANGAR' }; }
+        if (b.id === 'hangar-next') { this._hangarPage += 1; return { action: 'tab', tab: 'HANGAR' }; }
         return { action: b.id, data: b.data };
       }
     }
     return null;
   }
 
-  draw(ctx, { bee, banked, upgrades, w, h, isMobile, activeBiome = 'meadow' }) {
+  draw(ctx, { bee, banked, everBanked = banked, upgrades, craftUpgrades = {}, w, h, isMobile, activeBiome = 'meadow' }) {
     this._buttons = [];
 
     // dim backdrop
@@ -109,9 +113,9 @@ export class HiveStore {
 
     const contentY = tabY + 50;
     if (this.tab === 'BANK') this._drawBank(ctx, { bee, banked, px, py, pw, ph, contentY });
-    else if (this.tab === 'STORE') this._drawStore(ctx, { bee, banked, upgrades, px, pw, contentY, activeBiome });
+    else if (this.tab === 'STORE') this._drawStore(ctx, { bee, banked, upgrades, craftUpgrades, px, pw, contentY, activeBiome });
     else if (this.tab === 'HANGAR') this._drawHangar(ctx, { banked, upgrades, px, py, pw, ph, contentY, activeBiome });
-    else this._drawBiomes(ctx, { banked, activeBiome, px, py, pw, ph, contentY });
+    else this._drawBiomes(ctx, { banked, everBanked, activeBiome, px, py, pw, ph, contentY });
 
     // ---- Fly Out button ----
     const exitW = 140;
@@ -211,12 +215,22 @@ export class HiveStore {
     }
   }
 
-  _drawStore(ctx, { bee, banked, upgrades, px, pw, contentY, activeBiome = 'meadow' }) {
+  _drawStore(ctx, { bee, banked, upgrades, craftUpgrades = {}, px, pw, contentY, activeBiome = 'meadow' }) {
     const carried = bee.getCarriedTotal();
     const available = banked + carried;
     const activeIdx = Math.max(0, BIOME_ORDER.indexOf(activeBiome));
     const biomeCap = levelCapFor(activeBiome);
-    text(ctx, `Spendable pollen: ${available}  (level cap ${biomeCap} in ${BIOME_DEFS[activeBiome]?.name || 'Meadow'})`, px + pw / 2, contentY - 8, {
+    const cx = px + pw / 2;
+
+    // Subtitle: which craft's upgrades these are (upgrades are per-craft now).
+    const craftId = upgrades.activeCraft || 'bee';
+    const craftName = craftId.charAt(0).toUpperCase() + craftId.slice(1).replace('_craft', '');
+    text(ctx, `Upgrades for: ${craftName}`, cx, contentY - 20, {
+      fontStr: font(FONTS.body, 11, '600'),
+      color: rgba(COLORS.ink, 0.55),
+    });
+
+    text(ctx, `Spendable pollen: ${available}  (level cap ${biomeCap} in ${BIOME_DEFS[activeBiome]?.name || 'Meadow'})`, cx, contentY - 8, {
       fontStr: font(FONTS.body, 11),
       color: rgba(COLORS.ink, 0.7),
     });
@@ -240,7 +254,7 @@ export class HiveStore {
       let maxed;
       let cappedByBiome = false;
       if (u.kind === 'level') {
-        const lvl = upgrades[u.id] || 0;
+        const lvl = craftUpgrades[u.id] || 0;
         // Effective max in this biome = min(global max, biome level cap).
         const effectiveMax = Math.min(u.globalMax, biomeCap);
         maxed = lvl >= effectiveMax;
@@ -248,8 +262,8 @@ export class HiveStore {
         cappedByBiome = maxed && lvl < u.globalMax;
         detail = `Lv ${lvl}/${effectiveMax}${u.formula ? '  ' + u.formula : ''}`;
       } else {
-        maxed = (upgrades.healingItems || 0) >= 3;
-        detail = `${u.desc} (held ${upgrades.healingItems || 0}/3)`;
+        maxed = (craftUpgrades.healingItems || 0) >= 3;
+        detail = `${u.desc} (held ${craftUpgrades.healingItems || 0}/3)`;
       }
       const bw = 96;
       const bx2 = rx + rw - bw - 8;
@@ -284,42 +298,71 @@ export class HiveStore {
     });
   }
 
-  _drawHangar(ctx, { banked, upgrades, px, py, pw, ph, contentY, activeBiome = 'meadow' }) {
+  _drawHangar(ctx, { banked, upgrades, px, py, pw, ph, contentY }) {
     const cx = px + pw / 2;
+    const craftId = upgrades.activeCraft || 'bee';
+
+    // Filter to only crafts available in the current/unlocked biomes
+    const visibleCrafts = CRAFTS.filter(c => {
+      return c.cost === 0 || (upgrades.craftsUnlocked || []).includes(c.id) ||
+             this._isCraftPurchasable(c, upgrades);
+    });
+
+    const PAGE_SIZE = 4;
+    const totalPages = Math.ceil(visibleCrafts.length / PAGE_SIZE);
+    // Clamp page to valid range
+    this._hangarPage = Math.max(0, Math.min(this._hangarPage, totalPages - 1));
+    const pageStart = this._hangarPage * PAGE_SIZE;
+    const pageCrafts = visibleCrafts.slice(pageStart, pageStart + PAGE_SIZE);
+
+    // Header
     text(ctx, 'SELECT YOUR CRAFT', cx, contentY + 6, {
-      fontStr: font(FONTS.body, 12, '700'),
-      color: rgba(COLORS.ink, 0.7),
+      fontStr: font(FONTS.body, 12, '700'), color: rgba(COLORS.ink, 0.7),
     });
     text(ctx, `Banked pollen: ${banked}`, cx, contentY + 22, {
       fontStr: font(FONTS.mono, 11), color: rgba(COLORS.ink, 0.6),
     });
 
-    const unlocked = upgrades.craftsUnlocked || [];
-    const active = upgrades.activeCraft || 'bee';
+    // Pagination controls (only if more than one page)
+    if (totalPages > 1) {
+      const arrowY = contentY + 14;
+      // Left arrow
+      if (this._hangarPage > 0) {
+        const lx = px + 20;
+        panel(ctx, lx, arrowY, 28, 22, { fill: rgba(COLORS.ink, 0.08), stroke: rgba(COLORS.ink, 0.3), lineWidth: 1, radius: 5 });
+        text(ctx, '‹', lx + 14, arrowY + 11, { fontStr: font(FONTS.title, 16), color: COLORS.ink });
+        this._btn('hangar-prev', lx, arrowY, 28, 22);
+      }
+      // Right arrow
+      if (this._hangarPage < totalPages - 1) {
+        const rx2 = px + pw - 48;
+        panel(ctx, rx2, arrowY, 28, 22, { fill: rgba(COLORS.ink, 0.08), stroke: rgba(COLORS.ink, 0.3), lineWidth: 1, radius: 5 });
+        text(ctx, '›', rx2 + 14, arrowY + 11, { fontStr: font(FONTS.title, 16), color: COLORS.ink });
+        this._btn('hangar-next', rx2, arrowY, 28, 22);
+      }
+      // Page indicator
+      text(ctx, `${this._hangarPage + 1} / ${totalPages}`, cx, contentY + 38, {
+        fontStr: font(FONTS.body, 10), color: rgba(COLORS.ink, 0.45),
+      });
+    }
 
-    // Only show crafts whose biomeUnlock biome has been unlocked (banked-wise).
-    const visibleCrafts = CRAFTS.filter(
-      (c) => !c.biomeUnlock || isBiomeUnlocked(c.biomeUnlock, banked),
-    );
-
-    // 2-column grid so crafts stay readable on phone-width panels.
+    // Craft grid — always 2×2
     const cols = 2;
-    const rows = Math.max(1, Math.ceil(visibleCrafts.length / cols));
     const gap = 10;
     const gridX = px + 24;
     const gridW = pw - 48;
-    const cardW = (gridW - gap * (cols - 1)) / cols;
-    const gridY = contentY + 38; // push grid down to clear these labels
-    const gridH = py + ph - 64 - gridY - 8;
-    const cardH = (gridH - gap * (rows - 1)) / rows;
+    const cardW = (gridW - gap) / cols;
+    const gridY = contentY + (totalPages > 1 ? 50 : 38);
+    const availH = py + ph - 64 - gridY - 8;
+    const cardH = (availH - gap) / 2;
 
-    visibleCrafts.forEach((craft, i) => {
+    pageCrafts.forEach((craft, i) => {
       const col = i % cols;
       const row = Math.floor(i / cols);
       const cardX = gridX + col * (cardW + gap);
       const cardY = gridY + row * (cardH + gap);
-      const isUnlocked = craft.cost === 0 || unlocked.includes(craft.id);
-      const isActive = active === craft.id;
+      const isUnlocked = craft.cost === 0 || (upgrades.craftsUnlocked || []).includes(craft.id);
+      const isActive = craftId === craft.id;
 
       panel(ctx, cardX, cardY, cardW, cardH, {
         fill: isActive ? rgba(COLORS.gold, 0.12) : rgba(COLORS.ink, 0.03),
@@ -331,48 +374,43 @@ export class HiveStore {
       const ccx = cardX + cardW / 2;
       text(ctx, craft.name, ccx, cardY + 16, { fontStr: font(FONTS.title, 16, '600'), color: COLORS.ink });
 
-      // illustration
       ctx.save();
       ctx.translate(ccx, cardY + 44);
       this._drawCraftIcon(ctx, craft.id);
       ctx.restore();
 
-      // stats — clamped so they never fall behind the action button
-      const btnAreaTop = cardY + cardH - 38; // button + safe margin
-      const statY = Math.min(cardY + 72, btnAreaTop - 72); // guaranteed clear of button
-      text(ctx, `HP ${craft.hp}`, ccx, statY, { fontStr: font(FONTS.body, 12), color: rgba(COLORS.ink, 0.85) });
-      text(ctx, `Speed ${craft.speed}`, ccx, statY + 16, { fontStr: font(FONTS.body, 12), color: rgba(COLORS.ink, 0.85) });
-      text(ctx, `Capacity ${craft.capacity}`, ccx, statY + 32, { fontStr: font(FONTS.body, 12), color: rgba(COLORS.ink, 0.85) });
-      // Special ability: only render if there's room above the button
-      const specialY = statY + 50;
-      if (specialY + 20 < btnAreaTop) {
-        this._wrapText(ctx, craft.special, ccx, specialY, cardW - 24, 11, {
-          fontStr: `italic ${font(FONTS.body, 11)}`,
-          color: rgba(COLORS.ink, 0.7),
+      const btnAreaTop = cardY + cardH - 38;
+      const statY = Math.min(cardY + 72, btnAreaTop - 76);
+      text(ctx, `HP ${craft.hp}`, ccx, statY, { fontStr: font(FONTS.body, 11), color: rgba(COLORS.ink, 0.85) });
+      text(ctx, `Speed ${craft.speed}`, ccx, statY + 15, { fontStr: font(FONTS.body, 11), color: rgba(COLORS.ink, 0.85) });
+      text(ctx, `Capacity ${craft.capacity}`, ccx, statY + 30, { fontStr: font(FONTS.body, 11), color: rgba(COLORS.ink, 0.85) });
+      const specialY = statY + 47;
+      if (specialY + 18 < btnAreaTop) {
+        this._wrapText(ctx, craft.special, ccx, specialY, cardW - 20, 11, {
+          fontStr: `italic ${font(FONTS.body, 10)}`,
+          color: rgba(COLORS.ink, 0.65),
         });
       }
 
-      // action control (bottom of card)
       const aw = cardW - 20;
       const ax = cardX + 10;
       const ayy = cardY + cardH - 34;
       if (isActive) {
         panel(ctx, ax, ayy, aw, 26, { fill: rgba(COLORS.gold, 0.3), stroke: COLORS.gold, lineWidth: 1.5, radius: 6 });
-        text(ctx, 'ACTIVE', ax + aw / 2, ayy + 13, { fontStr: font(FONTS.body, 12, '700'), color: COLORS.ink });
+        text(ctx, 'ACTIVE', ax + aw / 2, ayy + 13, { fontStr: font(FONTS.body, 11, '700'), color: COLORS.ink });
       } else if (isUnlocked) {
         panel(ctx, ax, ayy, aw, 26, { fill: rgba(COLORS.green, 0.3), stroke: COLORS.ink, lineWidth: 1.4, radius: 6 });
-        text(ctx, 'SWITCH', ax + aw / 2, ayy + 13, { fontStr: font(FONTS.body, 12, '700'), color: COLORS.ink });
+        text(ctx, 'SWITCH', ax + aw / 2, ayy + 13, { fontStr: font(FONTS.body, 11, '700'), color: COLORS.ink });
         this._btn('switch-craft', ax, ayy, aw, 26, craft.id);
       } else {
         const canAfford = banked >= craft.cost;
         panel(ctx, ax, ayy, aw, 26, {
           fill: canAfford ? rgba(COLORS.gold, 0.3) : rgba(COLORS.ink, 0.05),
           stroke: canAfford ? COLORS.ink : rgba(COLORS.ink, 0.3),
-          lineWidth: canAfford ? 1.6 : 1,
-          radius: 6,
+          lineWidth: canAfford ? 1.6 : 1, radius: 6,
         });
-        text(ctx, `${craft.cost} ◆`, ax + aw / 2, ayy + 13, {
-          fontStr: font(FONTS.mono, 12, '700'),
+        text(ctx, canAfford ? `${craft.cost} ◆` : `🔒 ${craft.cost} ◆`, ax + aw / 2, ayy + 13, {
+          fontStr: font(FONTS.mono, 11, '700'),
           color: canAfford ? COLORS.ink : rgba(COLORS.ink, 0.4),
         });
         if (canAfford) this._btn('buy-craft', ax, ayy, aw, 26, craft.id);
@@ -380,7 +418,12 @@ export class HiveStore {
     });
   }
 
-  _drawBiomes(ctx, { banked, activeBiome, px, py, pw, ph, contentY }) {
+  _isCraftPurchasable(craft, upgrades) {
+    // Show locked crafts that the player can see as a goal (all biome-unlocked crafts)
+    return true;
+  }
+
+  _drawBiomes(ctx, { banked, everBanked = banked, activeBiome, px, py, pw, ph, contentY }) {
     const cx = px + pw / 2;
     text(ctx, 'CHOOSE YOUR EXPEDITION', cx, contentY + 6, {
       fontStr: font(FONTS.body, 12, '700'),
@@ -407,7 +450,9 @@ export class HiveStore {
       const cardX = gridX + col * (cardW + gap);
       const cardY = gridY + row * (cardH + gap);
       const isActive = activeBiome === id;
-      const unlocked = isBiomeUnlocked(id, banked);
+      // Biome unlocks gate on lifetime banked (a permanent milestone), so
+      // spending pollen on upgrades never re-locks an already-earned biome.
+      const unlocked = isBiomeUnlocked(id, everBanked);
 
       panel(ctx, cardX, cardY, cardW, cardH, {
         fill: isActive ? rgba(COLORS.gold, 0.12) : rgba(COLORS.ink, 0.03),

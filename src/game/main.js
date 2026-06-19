@@ -39,6 +39,7 @@ import { HUD } from './ui/HUD.js';
 import { Minimap } from './ui/Minimap.js';
 import { HiveStore, UPGRADES, CRAFTS } from './ui/HiveStore.js';
 import { BiomeSelect } from './ui/BiomeSelect.js';
+import { CheatMenu } from './ui/CheatMenu.js';
 import { VirtualJoystick } from './ui/VirtualJoystick.js';
 import { StartScreen } from './ui/StartScreen.js';
 import { GameOverScreen } from './ui/GameOverScreen.js';
@@ -48,7 +49,7 @@ import { NarrativeEngine, isBeneficialConsequence } from './narrative/NarrativeE
 import { EventUI } from './ui/EventUI.js';
 
 import { loadProgress, saveProgress, resetProgress } from './utils/storage.js';
-import { isBiomeUnlocked, levelCapFor } from './world/biomeConfig.js';
+import { isBiomeUnlocked, levelCapFor, BIOME_DEFS } from './world/biomeConfig.js';
 import { makeRng, distance, clamp } from './utils/math.js';
 import { COLORS, FONTS, font, text } from './utils/renderer.js';
 
@@ -96,6 +97,10 @@ export default class PollinatorGame {
     this.store = new HiveStore();
     this.gameOver = new GameOverScreen();
     this.biomeSelect = new BiomeSelect();
+    this.cheatMenu = new CheatMenu();
+    this._cheatOpen = false;
+    // Mobile combo detector — 7 rapid attack-button taps within 2.5s opens the menu.
+    this._cheatTapTimes = [];
     this.minimap = new Minimap();
     this.minimap.loadFog(this.progress.fog);
 
@@ -247,6 +252,12 @@ export default class PollinatorGame {
 
   _handleKeyDown(e) {
     this.audio.init(); // first user gesture unlocks the AudioContext
+
+    // Dev cheat menu toggle. Compared against e.key DIRECTLY (not the lowercased
+    // `k`) and BEFORE the e.repeat guard / preventDefault block below, so the
+    // backtick can never be swallowed by them.
+    if (e.key === '`') { this._cheatOpen = !this._cheatOpen; return; }
+
     const k = e.key.toLowerCase();
     if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) {
       e.preventDefault();
@@ -275,6 +286,16 @@ export default class PollinatorGame {
     e.preventDefault();
     this.audio.init(); // first user gesture unlocks the AudioContext
 
+    // While the cheat overlay is open it is modal — route the tap to the menu.
+    if (this._cheatOpen) {
+      const t = e.changedTouches[0];
+      if (t) {
+        const p = this._toLogical(t.clientX, t.clientY);
+        this._handlePointer(p.x, p.y);
+      }
+      return;
+    }
+
     // The mute button overlays the joystick layer, so check it first on mobile.
     const first = e.changedTouches[0];
     if (first) {
@@ -286,11 +307,27 @@ export default class PollinatorGame {
       for (const t of e.changedTouches) {
         const p = this._toLogical(t.clientX, t.clientY);
         this.joystick.touchStart(t.identifier, p.x, p.y);
+        this._recordCheatTap(p.x, p.y);
       }
     } else {
       const t = e.changedTouches[0];
       const p = this._toLogical(t.clientX, t.clientY);
       this._handlePointer(p.x, p.y);
+    }
+  }
+
+  // Dev cheat combo: 7 rapid attack-button taps within 2.5s opens the menu.
+  _recordCheatTap(x, y) {
+    const atk = this.joystick._attackCenter();
+    const dx = x - atk.x;
+    const dy = y - atk.y;
+    if (Math.sqrt(dx * dx + dy * dy) > 50) return; // not on the attack button
+    const now = performance.now();
+    this._cheatTapTimes.push(now);
+    this._cheatTapTimes = this._cheatTapTimes.filter((t) => now - t <= 2500);
+    if (this._cheatTapTimes.length >= 7) {
+      this._cheatOpen = true;
+      this._cheatTapTimes = [];
     }
   }
 
@@ -324,6 +361,13 @@ export default class PollinatorGame {
 
   // routes a click/tap based on the current top-level state
   _handlePointer(x, y) {
+    // Cheat overlay is modal: it consumes the tap, applying a cheat on a button
+    // hit and closing on an outside tap. Checked before everything else.
+    if (this._cheatOpen) {
+      const hit = this.cheatMenu.hitTest(x, y, (action) => this._applyCheat(action));
+      if (!hit) this._cheatOpen = false;
+      return;
+    }
     // Mute button is live whenever the HUD is on screen (PLAYING / HIVE).
     if ((this.state === 'PLAYING' || this.state === 'HIVE') && this._hitMute(x, y)) return;
     if (this.state === 'START') {
@@ -402,8 +446,14 @@ export default class PollinatorGame {
   }
 
   /** Instantiate the requested craft at (x, y), passing the saved upgrades. */
+  /** Returns the upgrade object for the currently active craft. */
+  _craftUpgrades() {
+    const id = this.progress.upgrades.activeCraft || 'bee';
+    return this.progress.upgrades.crafts?.[id] || {};
+  }
+
   _spawnCraft(type, x, y) {
-    const upgrades = this.progress.upgrades;
+    const upgrades = this._craftUpgrades();
     switch (type) {
       case 'moth':
         return new Moth(x, y, upgrades);
@@ -800,7 +850,7 @@ export default class PollinatorGame {
         ? 0.2
         : 1;
     bee.collectionRadius =
-      this.activePowerUp && this.activePowerUp.type === 'sunflower' ? 180 : (bee.baseCollectionRadius || 60);
+      this.activePowerUp && this.activePowerUp.type === 'sunflower' ? 140 : (bee.baseCollectionRadius || 60);
     bee.damageImmune = !!(
       this.activePowerUp && (this.activePowerUp.type === 'foxglove' || this.activePowerUp.type === 'orchid')
     );
@@ -860,8 +910,9 @@ export default class PollinatorGame {
     if (this._sumEnemyHp() < enemyHpBefore) this.audio.playHitLanded();
 
     // Persist healing-item consumption (they're a saved, purchasable stock).
-    if (bee.healingItems !== this.progress.upgrades.healingItems) {
-      this.progress.upgrades.healingItems = bee.healingItems;
+    const craftUp = this._craftUpgrades();
+    if (bee.healingItems !== craftUp.healingItems) {
+      craftUp.healingItems = bee.healingItems;
       this._save();
     }
 
@@ -1221,6 +1272,15 @@ export default class PollinatorGame {
         while (n > 0 && this.bee.addPollen('common')) n--;
         break;
       }
+      case 'enemy_clear': {
+        const range = consequence.value || 300;
+        for (const e of this.enemies) {
+          if (!e.dead && distance(this.bee, e) <= range) {
+            e.takeDamage(e.hp);
+          }
+        }
+        break;
+      }
       default:
         break;
     }
@@ -1230,6 +1290,80 @@ export default class PollinatorGame {
       color: isBeneficialConsequence(consequence) ? COLORS.gold : COLORS.crimson,
       timer: 4.0,
     };
+  }
+
+  // --------------------------------------------------------------- dev cheats
+  // Apply a dev-menu cheat. Mutates progress directly, persists, and closes the
+  // menu. Only ever runs when the player explicitly taps a cheat button.
+  _applyCheat(action) {
+    const up = this.progress.upgrades;
+
+    switch (action) {
+      case 'biome_meadow':
+      case 'biome_forest':
+      case 'biome_garden':
+      case 'biome_greenhouse': {
+        const biome = action.slice('biome_'.length);
+        const cost = BIOME_DEFS[biome]?.unlockCost ?? 0;
+        // Biome unlocks gate on lifetime banked (totalEverBanked) on this branch,
+        // so raise it to at least the unlock cost. Top up spendable banked too.
+        this.progress.totalEverBanked = Math.max(this.progress.totalEverBanked, cost);
+        this.progress.totalBanked = Math.max(this.progress.totalBanked, cost);
+        this.progress.activeBiome = biome;
+        this.activeBiome = biome; // reflect in the hive UI now; world swaps on Fly Out
+        break;
+      }
+      case 'pollen_500':
+        this.progress.totalBanked += 500;
+        this.progress.totalEverBanked += 500;
+        break;
+      case 'pollen_2000':
+        this.progress.totalBanked += 2000;
+        this.progress.totalEverBanked += 2000;
+        break;
+      case 'max_upgrades': {
+        // Per-craft upgrades: max the ACTIVE craft's own levels to the biome cap.
+        const cap = levelCapFor(this.activeBiome || 'meadow');
+        const craftUp = this._craftUpgrades();
+        ['maxHp', 'damageReduction', 'attackBoost', 'pollenCapacity',
+          'dashCooldown', 'magnetRadius', 'comboWindow'].forEach((key) => {
+          craftUp[key] = Math.min(cap, 20);
+        });
+        craftUp.healingItems = 3;
+        // Re-derive the active craft's stats from the new levels immediately.
+        if (this.bee) {
+          this.bee.healingItems = 3;
+          if (this.bee.applyUpgrades) this.bee.applyUpgrades(craftUp);
+        }
+        break;
+      }
+      case 'unlock_all_crafts':
+        up.craftsUnlocked = ['moth', 'locust', 'hornet', 'butterfly', 'wasp', 'dragonfly', 'spider_craft'];
+        break;
+      case 'full_heal':
+        if (this.bee) this.bee.hp = this.bee.maxHp;
+        break;
+      case 'kill_score_reset':
+        this.progress.killScore = 0;
+        this.sessionKillScore = 0;
+        break;
+      case 'reset_progress':
+        resetProgress();
+        this.progress = loadProgress();
+        this.hiveReturnCount = 0;
+        this.sessionKillScore = 0;
+        this.minimap.loadFog([]); // fog resets on a full wipe
+        this.newRun();
+        this.bee.setFlying();
+        this.state = 'PLAYING';
+        this._cheatOpen = false;
+        return; // newRun + reload handled the reset; skip the shared save below
+      default:
+        break;
+    }
+
+    this._save();
+    this._cheatOpen = false;
   }
 
   // ------------------------------------------------------------ hive economy
@@ -1246,7 +1380,7 @@ export default class PollinatorGame {
       this._switchCraft(intent.data);
     } else if (intent.action === 'switch-biome') {
       const newBiome = intent.data;
-      if (isBiomeUnlocked(newBiome, this.progress.totalBanked)) {
+      if (isBiomeUnlocked(newBiome, this.progress.totalEverBanked)) {
         this.progress.activeBiome = newBiome;
         this.activeBiome = newBiome; // reflect in the store UI immediately
         this._save();
@@ -1284,6 +1418,8 @@ export default class PollinatorGame {
     const mult = this._pollenModTimer > 0 ? this._pollenMultiplier : 1;
     const amount = Math.round(base * mult);
     this.progress.totalBanked += amount;
+    // Lifetime tally — never decremented by spending; gates biome unlocks.
+    this.progress.totalEverBanked += amount;
     this.runBanked += amount;
     this.bee.clearCarried();
     if (this.runBanked > this.progress.highScore) {
@@ -1295,32 +1431,33 @@ export default class PollinatorGame {
   _buy(upgradeId) {
     const u = UPGRADES.find((x) => x.id === upgradeId);
     if (!u) return;
-    const up = this.progress.upgrades;
+    // Per-craft upgrades: levels are tracked on the active craft's own entry.
+    const craftUp = this._craftUpgrades();
 
     // Maxed checks. Level upgrades are gated by the active biome's level cap
     // and the absolute global max.
     if (u.kind === 'level') {
       const cap = levelCapFor(this.activeBiome || 'meadow');
-      if ((up[u.id] || 0) >= cap) return; // biome cap reached
-      if ((up[u.id] || 0) >= u.globalMax) return; // absolute global max
+      if ((craftUp[u.id] || 0) >= cap) return; // biome cap reached
+      if ((craftUp[u.id] || 0) >= u.globalMax) return; // absolute global max
     }
-    if (u.kind === 'heal' && (up.healingItems || 0) >= 3) return;
-    if (u.kind === 'heal' && u.amount === 3 && (up.healingItems || 0) + 3 > 3) return;
+    if (u.kind === 'heal' && (craftUp.healingItems || 0) >= 3) return;
+    if (u.kind === 'heal' && u.amount === 3 && (craftUp.healingItems || 0) + 3 > 3) return;
 
     const available = this.progress.totalBanked + this.bee.getCarriedTotal();
     if (available < u.cost) return;
 
     this._spend(u.cost);
 
-    // Apply effect.
+    // Apply effect to the active craft's entry.
     if (u.kind === 'level') {
-      up[u.id] = (up[u.id] || 0) + 1;
+      craftUp[u.id] = (craftUp[u.id] || 0) + 1;
       // Re-derive the active craft's stats from the upgrades (Bee uses the
       // +10/level HP formula; crafts keep fixed HP but pick up damage reduction).
-      this.bee.applyUpgrades(up);
+      this.bee.applyUpgrades(craftUp);
     } else {
-      up.healingItems = Math.min(3, (up.healingItems || 0) + u.amount);
-      this.bee.healingItems = up.healingItems;
+      craftUp.healingItems = Math.min(3, (craftUp.healingItems || 0) + u.amount);
+      this.bee.healingItems = craftUp.healingItems;
     }
     this._save();
   }
@@ -1357,6 +1494,7 @@ export default class PollinatorGame {
     saveProgress({
       highScore: this.progress.highScore,
       totalBanked: this.progress.totalBanked,
+      totalEverBanked: this.progress.totalEverBanked,
       upgrades: this.progress.upgrades,
       hiveReturnCount: this.hiveReturnCount,
       killScore: this.progress.killScore,
@@ -1462,6 +1600,7 @@ export default class PollinatorGame {
       muteBtnRect: this._muteBtnRect,
       modifiers: this._activeModifierTags(),
       killScore: this.progress.killScore,
+      activeBiome: this.activeBiome || 'meadow',
     });
     this._renderMinimap(ctx);
     if (this.isMobile && this.state === 'PLAYING') this.joystick.draw(ctx);
@@ -1482,7 +1621,9 @@ export default class PollinatorGame {
       this.store.draw(ctx, {
         bee: this.bee,
         banked: this.progress.totalBanked,
+        everBanked: this.progress.totalEverBanked,
         upgrades: this.progress.upgrades,
+        craftUpgrades: this._craftUpgrades(),
         w: this.LW,
         h: this.LH,
         isMobile: this.isMobile,
@@ -1497,6 +1638,12 @@ export default class PollinatorGame {
       ctx.fillStyle = `rgba(255,255,255,${a})`;
       ctx.fillRect(0, 0, this.LW, this.LH);
       ctx.restore();
+    }
+
+    // Dev cheat overlay — drawn last so it sits on top of the HUD, store, and
+    // joystick. Toggled via backtick (see _handleKeyDown) or the 7-tap combo.
+    if (this._cheatOpen) {
+      this.cheatMenu.draw(ctx, { w: this.LW, h: this.LH });
     }
   }
 
