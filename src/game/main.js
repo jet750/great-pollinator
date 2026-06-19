@@ -11,14 +11,27 @@ import { Camera } from './engine/Camera.js';
 import { SpatialGrid } from './engine/SpatialGrid.js';
 
 import { Meadow } from './world/Meadow.js';
+import { Forest } from './world/Forest.js';
+import { Garden } from './world/Garden.js';
+import { Greenhouse } from './world/Greenhouse.js';
 import { Bee } from './entities/Bee.js';
 import { Moth } from './entities/Moth.js';
 import { Locust } from './entities/Locust.js';
 import { Hornet } from './entities/Hornet.js';
+import { Butterfly } from './entities/Butterfly.js';
+import { Wasp } from './entities/Wasp.js';
+import { Dragonfly } from './entities/Dragonfly.js';
+import { Spider as SpiderCraft } from './entities/Spider.js';
 import { Seeker } from './entities/enemies/Seeker.js';
 import { Patroller } from './entities/enemies/Patroller.js';
 import { CarnivorousPlant } from './entities/enemies/CarnivorousPlant.js';
 import { Frog } from './entities/enemies/Frog.js';
+import { MothSwarm } from './entities/enemies/MothSwarm.js';
+import { SpiderEnemy } from './entities/enemies/SpiderEnemy.js';
+import { Mantis } from './entities/enemies/Mantis.js';
+import { HornetNest } from './entities/enemies/HornetNest.js';
+import { VenusFlyTrap } from './entities/enemies/VenusFlyTrap.js';
+import { Centipede } from './entities/enemies/Centipede.js';
 import { Pollen } from './entities/pickups/Pollen.js';
 import { PowerUpPlant, POWERUP_DEFS } from './entities/pickups/PowerUpPlant.js';
 
@@ -35,6 +48,7 @@ import { NarrativeEngine, isBeneficialConsequence } from './narrative/NarrativeE
 import { EventUI } from './ui/EventUI.js';
 
 import { loadProgress, saveProgress, resetProgress } from './utils/storage.js';
+import { isBiomeUnlocked, levelCapFor } from './world/biomeConfig.js';
 import { makeRng, distance, clamp } from './utils/math.js';
 import { COLORS, FONTS, font, text } from './utils/renderer.js';
 
@@ -107,6 +121,10 @@ export default class PollinatorGame {
 
     // Persisted hive-return count drives the enemy respawn timer.
     this.hiveReturnCount = this.progress.hiveReturnCount || 0;
+
+    // Active expedition biome + lifetime kill score (Phase 4).
+    this.activeBiome = this.progress.activeBiome || 'meadow';
+    this.sessionKillScore = 0;
 
     // input state
     this.keys = new Set();
@@ -309,7 +327,8 @@ export default class PollinatorGame {
     // Mute button is live whenever the HUD is on screen (PLAYING / HIVE).
     if ((this.state === 'PLAYING' || this.state === 'HIVE') && this._hitMute(x, y)) return;
     if (this.state === 'START') {
-      this._goToBiomeSelect();
+      // Biome selection now lives in the hive BIOMES tab; start the saved biome.
+      this._beginExpedition();
     } else if (this.state === 'BIOME_SELECT') {
       const intent = this.biomeSelect.hitTest(x, y);
       if (intent && intent.action === 'play') this._beginExpedition(intent.biome);
@@ -332,8 +351,21 @@ export default class PollinatorGame {
 
   // --------------------------------------------------------------- run setup
   newRun() {
-    this.meadow = new Meadow();
-    this.bee = this._spawnCraft(this.progress.upgrades.activeCraft, 1600, 1850);
+    // Biome-aware world. main keeps the field name `this.meadow` for any biome.
+    const biome = this.progress.activeBiome || 'meadow';
+    this.activeBiome = biome;
+    const WorldClass = { meadow: Meadow, forest: Forest, garden: Garden, greenhouse: Greenhouse }[biome] || Meadow;
+    this.meadow = new WorldClass();
+
+    // Resize the camera bounds + spatial grid to match this biome's world size.
+    const size = this.meadow.WORLD_SIZE;
+    this.camera.worldWidth = size;
+    this.camera.worldHeight = size;
+    this.grid = new SpatialGrid(size, size, 200);
+
+    // Spawn the craft just inside the hive's open zone.
+    const hive = this.meadow.hive;
+    this.bee = this._spawnCraft(this.progress.upgrades.activeCraft, hive.x, hive.y + 250);
     this.camera.snapTo(this.bee.x, this.bee.y);
 
     this.enemies = [];
@@ -379,12 +411,29 @@ export default class PollinatorGame {
         return new Locust(x, y, upgrades);
       case 'hornet':
         return new Hornet(x, y, upgrades);
+      case 'butterfly':
+        return new Butterfly(x, y, upgrades);
+      case 'wasp':
+        return new Wasp(x, y, upgrades);
+      case 'dragonfly':
+        return new Dragonfly(x, y, upgrades);
+      case 'spider_craft':
+        return new SpiderCraft(x, y, upgrades);
       default:
         return new Bee(x, y, upgrades);
     }
   }
 
+  // Dispatch to the active biome's spawner, then tag enemies for grid queries.
   _spawnWorld() {
+    if (this.activeBiome === 'forest') this._spawnForest();
+    else if (this.activeBiome === 'garden') this._spawnGarden();
+    else if (this.activeBiome === 'greenhouse') this._spawnGreenhouse();
+    else this._spawnMeadow();
+    this.enemies.forEach((e) => (e.kind = 'enemy'));
+  }
+
+  _spawnMeadow() {
     const rng = makeRng((Date.now() & 0xffffffff) >>> 0);
     const hive = this.meadow.hive;
     const farFromHive = (x, y) => distance({ x, y }, hive) > 130;
@@ -461,9 +510,201 @@ export default class PollinatorGame {
     // --- rare one-use plants tucked deep behind hazards (exploration rewards) ---
     this.plants.push(new PowerUpPlant(2800, 500, 'moonflower'));
     this.plants.push(new PowerUpPlant(300, 2700, 'ironweed'));
+  }
 
-    // tag enemies for grid queries
-    this.enemies.forEach((e) => (e.kind = 'enemy'));
+  // Shared helper: scatter `count` common pollen across the world, avoiding the
+  // hive zone. `size` is the world dimension.
+  _scatterCommon(rng, size, count, hive) {
+    let placed = 0;
+    let guard = 0;
+    const maxGuard = count * 12;
+    while (placed < count && guard < maxGuard) {
+      guard++;
+      const x = 80 + rng() * (size - 160);
+      const y = 80 + rng() * (size - 160);
+      if (distance({ x, y }, hive) <= 150) continue;
+      this.pollen.push(new Pollen(x, y, 'common'));
+      placed++;
+    }
+  }
+
+  // ----- Forest: 4800×4800. Meadow mix + 4 SpiderEnemy + 2 MothSwarm. -----
+  _spawnForest() {
+    const rng = makeRng((Date.now() & 0xffffffff) >>> 0);
+    const size = this.meadow.WORLD_SIZE;
+    const hive = this.meadow.hive;
+    const clampW = (v) => clamp(v, 30, size - 30);
+    const farFromHive = (x, y) => distance({ x, y }, hive) > 160;
+
+    // Uncommon clusters guarded by Patrollers (6 patrollers).
+    const clusters = [
+      { x: 700, y: 1900 }, { x: 2400, y: 700 }, { x: 4100, y: 1900 },
+      { x: 700, y: 4100 }, { x: 4100, y: 4100 }, { x: 2400, y: 4100 },
+    ];
+    clusters.forEach((c) => {
+      this.enemies.push(new Patroller(c.x + 80, c.y, c));
+      for (let j = 0; j < 4; j++) {
+        const px = clampW(c.x + (rng() - 0.5) * 180);
+        const py = clampW(c.y + (rng() - 0.5) * 180);
+        if (farFromHive(px, py)) this.pollen.push(new Pollen(px, py, 'uncommon'));
+      }
+    });
+
+    // 3 rare pollen guarded by Carnivorous Plants.
+    const plantSpots = [{ x: 500, y: 2600 }, { x: 4200, y: 600 }, { x: 4200, y: 4200 }];
+    plantSpots.forEach((s) => {
+      this.enemies.push(new CarnivorousPlant(s.x, s.y));
+      this.pollen.push(new Pollen(clampW(s.x + 70), clampW(s.y - 40), 'rare'));
+    });
+
+    // A Frog near a rare cluster.
+    this.enemies.push(new Frog(2400, 3600));
+    this.pollen.push(new Pollen(2300, 3520, 'rare'));
+
+    // New Forest enemies.
+    [[1000, 1000], [3800, 1000], [1000, 3800], [3800, 3800]].forEach(([x, y]) =>
+      this.enemies.push(new SpiderEnemy(x, y)));
+    [[1700, 2400], [3100, 2400]].forEach(([x, y]) => this.enemies.push(new MothSwarm(x, y)));
+
+    // 10 Seekers scattered.
+    for (let i = 0; i < 10; i++) {
+      let x; let y; let tries = 0;
+      do { x = 200 + rng() * (size - 400); y = 200 + rng() * (size - 400); tries++; }
+      while (!farFromHive(x, y) && tries < 10);
+      this.enemies.push(new Seeker(x, y));
+    }
+
+    this._scatterCommon(rng, size, 80, hive);
+
+    // Power-ups: Meadow set + 2 Clover + 1 Thistle.
+    [['sunflower', 1200, 800], ['sunflower', 3600, 2600], ['lavender', 900, 2200],
+      ['lavender', 3800, 1400], ['foxglove', 2400, 3000],
+      ['clover', 1600, 1300], ['clover', 3200, 3600], ['thistle', 2400, 1700]]
+      .forEach(([type, x, y]) => this.plants.push(new PowerUpPlant(x, y, type)));
+    this.plants.push(new PowerUpPlant(4200, 700, 'moonflower'));
+    this.plants.push(new PowerUpPlant(500, 4100, 'ironweed'));
+  }
+
+  // ----- Garden: 6400×6400. Forest mix + 3 Mantis + 2 HornetNest. -----
+  _spawnGarden() {
+    const rng = makeRng((Date.now() & 0xffffffff) >>> 0);
+    const size = this.meadow.WORLD_SIZE;
+    const hive = this.meadow.hive;
+    const clampW = (v) => clamp(v, 30, size - 30);
+    const farFromHive = (x, y) => distance({ x, y }, hive) > 180;
+
+    // Higher Patroller density (8).
+    const clusters = [
+      { x: 900, y: 2000 }, { x: 3200, y: 900 }, { x: 5400, y: 2000 },
+      { x: 900, y: 4400 }, { x: 5400, y: 4400 }, { x: 3200, y: 5400 },
+      { x: 2000, y: 3200 }, { x: 4400, y: 3200 },
+    ];
+    clusters.forEach((c) => {
+      this.enemies.push(new Patroller(c.x + 80, c.y, c));
+      for (let j = 0; j < 4; j++) {
+        const px = clampW(c.x + (rng() - 0.5) * 200);
+        const py = clampW(c.y + (rng() - 0.5) * 200);
+        if (farFromHive(px, py)) this.pollen.push(new Pollen(px, py, 'uncommon'));
+      }
+    });
+
+    // Carnivorous plants + Frog (carried from Forest) guarding 5 rare pollen.
+    [[600, 3200], [5600, 3200], [3200, 600]].forEach(([x, y]) => {
+      this.enemies.push(new CarnivorousPlant(x, y));
+      this.pollen.push(new Pollen(clampW(x + 70), clampW(y - 40), 'rare'));
+    });
+    this.enemies.push(new Frog(3200, 5600));
+    this.pollen.push(new Pollen(3100, 5520, 'rare'));
+    this.pollen.push(new Pollen(5600, 5600, 'rare'));
+
+    // Forest enemies.
+    [[1100, 1100], [5300, 1100], [1100, 5300], [5300, 5300]].forEach(([x, y]) =>
+      this.enemies.push(new SpiderEnemy(x, y)));
+    [[2200, 3200], [4200, 3200]].forEach(([x, y]) => this.enemies.push(new MothSwarm(x, y)));
+
+    // New Garden enemies: 3 Mantis + 2 HornetNest.
+    [[1800, 1800], [4600, 1800], [3200, 4600]].forEach(([x, y]) => this.enemies.push(new Mantis(x, y)));
+    [[1800, 4600], [4600, 4600]].forEach(([x, y]) => this.enemies.push(new HornetNest(x, y)));
+
+    for (let i = 0; i < 12; i++) {
+      let x; let y; let tries = 0;
+      do { x = 200 + rng() * (size - 400); y = 200 + rng() * (size - 400); tries++; }
+      while (!farFromHive(x, y) && tries < 10);
+      this.enemies.push(new Seeker(x, y));
+    }
+
+    this._scatterCommon(rng, size, 100, hive);
+
+    // Power-ups: Forest set + 2 Wisteria + 1 Orchid.
+    [['sunflower', 1500, 1000], ['sunflower', 4800, 3400], ['lavender', 1100, 2900],
+      ['lavender', 5000, 1800], ['foxglove', 3200, 4000], ['clover', 2100, 1700],
+      ['clover', 4300, 4700], ['thistle', 3200, 2200],
+      ['wisteria', 2000, 2400], ['wisteria', 4400, 4000], ['orchid', 3200, 3200]]
+      .forEach(([type, x, y]) => this.plants.push(new PowerUpPlant(x, y, type)));
+    this.plants.push(new PowerUpPlant(5600, 900, 'moonflower'));
+    this.plants.push(new PowerUpPlant(700, 5500, 'ironweed'));
+  }
+
+  // ----- Greenhouse: 8000×8000. Garden mix + 3 VenusFlyTrap + 2 Centipede. -----
+  _spawnGreenhouse() {
+    const rng = makeRng((Date.now() & 0xffffffff) >>> 0);
+    const size = this.meadow.WORLD_SIZE;
+    const hive = this.meadow.hive;
+    const clampW = (v) => clamp(v, 30, size - 30);
+    const farFromHive = (x, y) => distance({ x, y }, hive) > 200;
+
+    // Patrollers (10).
+    const clusters = [
+      { x: 1100, y: 2600 }, { x: 4000, y: 1100 }, { x: 6900, y: 2600 },
+      { x: 1100, y: 5400 }, { x: 6900, y: 5400 }, { x: 4000, y: 6900 },
+      { x: 2600, y: 4000 }, { x: 5400, y: 4000 }, { x: 2600, y: 2600 }, { x: 5400, y: 5400 },
+    ];
+    clusters.forEach((c) => {
+      this.enemies.push(new Patroller(c.x + 80, c.y, c));
+      for (let j = 0; j < 4; j++) {
+        const px = clampW(c.x + (rng() - 0.5) * 220);
+        const py = clampW(c.y + (rng() - 0.5) * 220);
+        if (farFromHive(px, py)) this.pollen.push(new Pollen(px, py, 'uncommon'));
+      }
+    });
+
+    // 8 rare pollen guarded by carnivorous family + Frog.
+    const rareSpots = [[700, 4000], [7300, 4000], [4000, 700], [4000, 7300],
+      [1200, 1200], [6800, 1200], [1200, 6800], [6800, 6800]];
+    rareSpots.forEach(([x, y]) => this.pollen.push(new Pollen(clampW(x), clampW(y), 'rare')));
+    [[900, 4000], [7100, 4000], [4000, 900]].forEach(([x, y]) =>
+      this.enemies.push(new CarnivorousPlant(x, y)));
+    this.enemies.push(new Frog(4000, 7100));
+
+    // Garden enemies.
+    [[1300, 1300], [6700, 1300], [1300, 6700], [6700, 6700]].forEach(([x, y]) =>
+      this.enemies.push(new SpiderEnemy(x, y)));
+    [[2600, 4000], [5400, 4000]].forEach(([x, y]) => this.enemies.push(new MothSwarm(x, y)));
+    [[2200, 2200], [5800, 2200], [4000, 5800]].forEach(([x, y]) => this.enemies.push(new Mantis(x, y)));
+    [[2200, 5800], [5800, 5800]].forEach(([x, y]) => this.enemies.push(new HornetNest(x, y)));
+
+    // New Greenhouse enemies: 3 VenusFlyTrap + 2 Centipede.
+    [[1600, 4000], [6400, 4000], [4000, 1600]].forEach(([x, y]) => this.enemies.push(new VenusFlyTrap(x, y)));
+    [[4000, 6400], [4000, 4000 + 700]].forEach(([x, y]) => this.enemies.push(new Centipede(x, y)));
+
+    for (let i = 0; i < 14; i++) {
+      let x; let y; let tries = 0;
+      do { x = 200 + rng() * (size - 400); y = 200 + rng() * (size - 400); tries++; }
+      while (!farFromHive(x, y) && tries < 10);
+      this.enemies.push(new Seeker(x, y));
+    }
+
+    this._scatterCommon(rng, size, 120, hive);
+
+    // Power-ups: Garden set + 1 PitcherPlant + 1 GhostOrchid.
+    [['sunflower', 2000, 1400], ['sunflower', 6000, 4400], ['lavender', 1500, 3600],
+      ['lavender', 6200, 2400], ['foxglove', 4000, 5000], ['clover', 2700, 2200],
+      ['clover', 5300, 5800], ['thistle', 4000, 2800], ['wisteria', 2600, 3000],
+      ['wisteria', 5400, 5000], ['orchid', 4000, 4000],
+      ['pitcherPlant', 4000, 3000], ['ghostOrchid', 4000, 5200]]
+      .forEach(([type, x, y]) => this.plants.push(new PowerUpPlant(x, y, type)));
+    this.plants.push(new PowerUpPlant(7200, 1000, 'moonflower'));
+    this.plants.push(new PowerUpPlant(900, 7000, 'ironweed'));
   }
 
   _goToBiomeSelect() {
@@ -486,7 +727,7 @@ export default class PollinatorGame {
     if (this.shake.time > 0) this.shake.time -= dt;
 
     if (this.state === 'START') {
-      if (this._pendingEnter) this._goToBiomeSelect();
+      if (this._pendingEnter) this._beginExpedition();
     } else if (this.state === 'BIOME_SELECT') {
       this.biomeSelect.update(this._pointer);
     } else if (this.state === 'PLAYING') {
@@ -551,10 +792,21 @@ export default class PollinatorGame {
     }
     bee.comboMultiplier = getMultiplier(this.comboCount);
 
-    // Power-up modifiers.
-    const slow = this.activePowerUp && this.activePowerUp.type === 'lavender' ? 0.4 : 1;
-    bee.collectionRadius = this.activePowerUp && this.activePowerUp.type === 'sunflower' ? 180 : 60;
-    bee.damageImmune = !!(this.activePowerUp && this.activePowerUp.type === 'foxglove');
+    // Power-up modifiers. Lavender + Ghost-Orchid slow-motion slow enemies;
+    // Sunflower widens collection; Foxglove + Orchid grant full immunity. The
+    // base collection radius reflects the magnetRadius upgrade.
+    const slow =
+      this.activePowerUp && (this.activePowerUp.type === 'lavender' || this.activePowerUp.type === 'slow_motion')
+        ? 0.2
+        : 1;
+    bee.collectionRadius =
+      this.activePowerUp && this.activePowerUp.type === 'sunflower' ? 180 : (bee.baseCollectionRadius || 60);
+    bee.damageImmune = !!(
+      this.activePowerUp && (this.activePowerUp.type === 'foxglove' || this.activePowerUp.type === 'orchid')
+    );
+
+    // Combo window grows with the comboWindow upgrade (Greenhouse+).
+    const comboWindow = COMBO_WINDOW + (bee.comboWindowBonus || 0);
 
     if (this.activePowerUp) {
       this.activePowerUp.timer -= dt;
@@ -562,13 +814,22 @@ export default class PollinatorGame {
     }
 
     // Rebuild spatial grid with alive enemies (used for the attack queries).
+    // Spawner drones (HornetNest) are inserted too so the player can hit them.
     this.grid.clear();
-    for (const e of this.enemies) if (!e.dead) this.grid.insert(e);
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      this.grid.insert(e);
+      if (e.getDrones) for (const d of e.getDrones()) this.grid.insert(d);
+    }
     const queryEnemies = (x, y, r) =>
       this.grid.retrieve(x, y, r).filter((e) => e.kind === 'enemy' && !e.dead);
 
     const attackPressed = this.isMobile ? this.joystick.pollAttack() : this._pendingAttack;
     const healPressed = this.isMobile ? this.joystick.pollHeal() : this._pendingHeal;
+    // Held-attack flag for hold-based crafts (Butterfly petal burst, Spider webs).
+    const attackHeld = this.isMobile
+      ? (typeof this.joystick.attackHeld === 'function' ? this.joystick.attackHeld() : false)
+      : this.keys.has(' ');
 
     // Snapshot for audio: whether an attack will actually fire this frame, and
     // total enemy HP so we can detect a landed hit afterward.
@@ -584,15 +845,16 @@ export default class PollinatorGame {
     bee.update(dt, {
       moveVec,
       attackPressed,
+      attackHeld,
       healPressed,
       meadow: this.meadow,
       queryEnemies,
       effects: this.effects,
     });
 
-    // Hornet: advance and collide its in-flight projectiles against live enemies
-    // (full flat damage on first contact) using the same spatial-grid query.
-    if (bee.craftType === 'hornet') bee.updateProjectiles(dt, queryEnemies);
+    // Projectile crafts (Hornet, Wasp): advance and collide in-flight projectiles
+    // against live enemies (full flat damage on first contact).
+    if (typeof bee.updateProjectiles === 'function') bee.updateProjectiles(dt, queryEnemies);
 
     if (attackWillFire) this.audio.playAttackDash();
     if (this._sumEnemyHp() < enemyHpBefore) this.audio.playHitLanded();
@@ -616,13 +878,31 @@ export default class PollinatorGame {
     // Enemies — freeze those outside the bee's current 800px cell.
     const beeCellX = Math.floor(bee.x / 800);
     const beeCellY = Math.floor(bee.y / 800);
+    // Spider craft's placed webs slow enemies that wander into them (×0.3).
+    const placedWebs = bee.craftType === 'spider_craft' && bee.placedWebs ? bee.placedWebs : null;
     for (const e of this.enemies) {
       if (e.dead) {
-        e.update(dt, { bee, meadow: this.meadow, speedFactor: slow });
+        e.update(dt, { bee, meadow: this.meadow, speedFactor: slow, grid: this.grid });
         continue;
       }
       const active = Math.floor(e.x / 800) === beeCellX && Math.floor(e.y / 800) === beeCellY;
-      if (active) e.update(dt, { bee, meadow: this.meadow, speedFactor: slow });
+      if (!active) continue;
+      let eSlow = slow;
+      if (placedWebs) {
+        for (const w of placedWebs) {
+          if (distance(e, w) <= w.radius) {
+            eSlow = Math.min(eSlow, 0.3);
+            break;
+          }
+        }
+      }
+      e.update(dt, { bee, meadow: this.meadow, speedFactor: eSlow, grid: this.grid });
+    }
+
+    // Aggregate SpiderEnemy web impacts into the world's slow-zone queries.
+    if (this.meadow.setEnemyWebZones) {
+      const spiderWebs = this.enemies.filter((e) => e.webImpacts).flatMap((e) => e.webImpacts);
+      this.meadow.setEnemyWebZones(spiderWebs);
     }
 
     // Respawn system: dead enemies are kept in the array. Record the hive-return
@@ -636,6 +916,34 @@ export default class PollinatorGame {
       }
     }
 
+    // Kill score: award points for newly-dead enemies (and any drone kills a
+    // spawner has queued). Spider craft earns bonus pollen for web-trap kills.
+    let scoreDirty = false;
+    for (const e of this.enemies) {
+      if (e.pendingScore) {
+        this.sessionKillScore += e.pendingScore;
+        this.progress.killScore = (this.progress.killScore || 0) + e.pendingScore;
+        e.pendingScore = 0;
+        scoreDirty = true;
+      }
+      if (e.dead && !e._scoreAwarded) {
+        e._scoreAwarded = true;
+        const pts = e.killScore != null ? e.killScore : 5;
+        this.sessionKillScore += pts;
+        this.progress.killScore = (this.progress.killScore || 0) + pts;
+        scoreDirty = true;
+        if (bee.craftType === 'spider_craft' && bee.placedWebs && bee.grantWebLure) {
+          for (const w of bee.placedWebs) {
+            if (distance(e, w) <= w.radius) {
+              bee.grantWebLure(2);
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (scoreDirty) this._save();
+
     // Pollen.
     for (const p of this.pollen) p.update(dt, bee, this.time);
     for (const p of this.pollen) if (p.collected) this.audio.playCollect(p.type);
@@ -648,7 +956,7 @@ export default class PollinatorGame {
     const collected = bee.collectedCount - collectedBefore;
     if (collected > 0) {
       this.comboCount += collected;
-      this.comboTimer = COMBO_WINDOW;
+      this.comboTimer = comboWindow;
     }
     if (bee.hp < hpBefore) {
       this.comboCount = 0;
@@ -760,17 +1068,53 @@ export default class PollinatorGame {
     this.audio.playPowerUpActivate();
     const def = POWERUP_DEFS[plant.type];
 
-    // Rare one-use plants resolve instantly rather than granting a timed buff.
-    if (def.effect === 'instant_store') {
-      this._openFieldStore();
-      return;
-    }
-    if (def.effect === 'full_heal') {
-      this.bee.hp = this.bee.maxHp;
-      this._flash = { alpha: 0.4, timer: 0.5, duration: 0.5 };
-      return;
+    switch (def.effect) {
+      // Rare one-use plants resolve instantly rather than granting a timed buff.
+      case 'instant_store':
+        this._openFieldStore();
+        return;
+      case 'full_heal':
+        this.bee.hp = this.bee.maxHp;
+        this._flash = { alpha: 0.4, timer: 0.5, duration: 0.5 };
+        return;
+      // Forest plants.
+      case 'speed_burst':
+        this._speedMult = 2.0;
+        this._speedModTimer = def.duration;
+        return;
+      case 'thorny_burst':
+        // Deal 20 damage to all enemies within 120px.
+        for (const e of this.enemies) {
+          if (!e.dead && distance(this.bee, e) <= 120) e.takeDamage(20);
+        }
+        return;
+      // Garden plants.
+      case 'pollen_double':
+        this._pollenMultiplier = 2.0;
+        this._pollenModTimer = def.duration;
+        return;
+      case 'full_immunity':
+        this.activePowerUp = { type: plant.type, color: plant.color, duration: def.duration, timer: def.duration };
+        this.bee.damageImmune = true;
+        return;
+      // Greenhouse plants.
+      case 'pollen_magnet_burst':
+        // Instantly collect all pollen within 400px.
+        for (const p of this.pollen) {
+          if (!p.collected && distance(this.bee, p) <= 400) {
+            p.collected = true;
+            this.bee.addPollen(p.type);
+          }
+        }
+        return;
+      case 'slow_motion':
+        this.activePowerUp = { type: 'slow_motion', color: plant.color, duration: def.duration, timer: def.duration };
+        return;
+      default:
+        break;
     }
 
+    // Legacy timed buffs (Sunflower / Lavender / Foxglove).
     this.activePowerUp = {
       type: plant.type,
       color: plant.color,
@@ -900,6 +1244,14 @@ export default class PollinatorGame {
       this._buyCraft(intent.data);
     } else if (intent.action === 'switch-craft') {
       this._switchCraft(intent.data);
+    } else if (intent.action === 'switch-biome') {
+      const newBiome = intent.data;
+      if (isBiomeUnlocked(newBiome, this.progress.totalBanked)) {
+        this.progress.activeBiome = newBiome;
+        this.activeBiome = newBiome; // reflect in the store UI immediately
+        this._save();
+        // Biome change takes effect on the next expedition (Fly Out → new run).
+      }
     }
     // 'tab' handled inside the store
   }
@@ -945,8 +1297,13 @@ export default class PollinatorGame {
     if (!u) return;
     const up = this.progress.upgrades;
 
-    // Maxed checks.
-    if (u.kind === 'level' && (up[u.id] || 0) >= u.max) return;
+    // Maxed checks. Level upgrades are gated by the active biome's level cap
+    // and the absolute global max.
+    if (u.kind === 'level') {
+      const cap = levelCapFor(this.activeBiome || 'meadow');
+      if ((up[u.id] || 0) >= cap) return; // biome cap reached
+      if ((up[u.id] || 0) >= u.globalMax) return; // absolute global max
+    }
     if (u.kind === 'heal' && (up.healingItems || 0) >= 3) return;
     if (u.kind === 'heal' && u.amount === 3 && (up.healingItems || 0) + 3 > 3) return;
 
@@ -1002,6 +1359,8 @@ export default class PollinatorGame {
       totalBanked: this.progress.totalBanked,
       upgrades: this.progress.upgrades,
       hiveReturnCount: this.hiveReturnCount,
+      killScore: this.progress.killScore,
+      activeBiome: this.progress.activeBiome,
     });
   }
 
@@ -1102,6 +1461,7 @@ export default class PollinatorGame {
       muteState: this.audio.muted,
       muteBtnRect: this._muteBtnRect,
       modifiers: this._activeModifierTags(),
+      killScore: this.progress.killScore,
     });
     this._renderMinimap(ctx);
     if (this.isMobile && this.state === 'PLAYING') this.joystick.draw(ctx);
@@ -1126,6 +1486,7 @@ export default class PollinatorGame {
         w: this.LW,
         h: this.LH,
         isMobile: this.isMobile,
+        activeBiome: this.activeBiome || 'meadow',
       });
     }
 
@@ -1165,6 +1526,29 @@ export default class PollinatorGame {
     for (const pl of this.plants) {
       if (cam.isVisible(pl.x, pl.y, 40, 40)) pl.draw(ctx, this.time);
     }
+    // Spider craft: render its placed slow-webs beneath the enemies.
+    if (this.bee.craftType === 'spider_craft' && this.bee.placedWebs) {
+      for (const web of this.bee.placedWebs) {
+        if (!cam.isVisible(web.x, web.y, web.radius, 20)) continue;
+        ctx.save();
+        ctx.globalAlpha = 0.3;
+        ctx.strokeStyle = '#C8C0B0';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.moveTo(web.x, web.y);
+          ctx.lineTo(web.x + Math.cos(a) * web.radius, web.y + Math.sin(a) * web.radius);
+          ctx.stroke();
+        }
+        for (let r = 18; r < web.radius; r += 18) {
+          ctx.beginPath();
+          ctx.arc(web.x, web.y, r, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
     // Enemies near the viewport are rendered even when frozen. Fully-faded
     // dead enemies (awaiting respawn) are skipped.
     for (const e of this.enemies) {
@@ -1198,7 +1582,11 @@ export default class PollinatorGame {
         (e) => !e.dead && (
           e.constructor.name === 'CarnivorousPlant' ||
           e.constructor.name === 'Frog' ||
-          e.constructor.name === 'Patroller'
+          e.constructor.name === 'Patroller' ||
+          e.constructor.name === 'SpiderEnemy' ||
+          e.constructor.name === 'Mantis' ||
+          e.constructor.name === 'HornetNest' ||
+          e.constructor.name === 'VenusFlyTrap'
         )
       ),
     });

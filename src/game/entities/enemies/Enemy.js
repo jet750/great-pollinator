@@ -41,6 +41,10 @@ export class Enemy {
     this.deathTimer = 0; // fades out after dying
     this._didHit = false; // one damage application per attack cycle
     this.killedAtReturn = null; // hive-return index when killed (respawn bookkeeping)
+    this.killScore = opts.killScore != null ? opts.killScore : 5; // points on kill
+    this._extSlowTimer = 0; // external slow (e.g. Butterfly petal burst)
+    this._extSlowFactor = 1;
+    this._scoreAwarded = false; // main flips this once the kill is scored
 
     this.fsm = new StateMachine('IDLE', {
       IDLE: {},
@@ -60,6 +64,12 @@ export class Enemy {
   /** Damage that a Bee dash deals to this enemy. Plants override to cap it. */
   dashDamage(amount /* , isRear */) {
     return amount;
+  }
+
+  /** Apply a timed external speed multiplier (Butterfly petal burst, etc.). */
+  applyExternalSlow(factor, duration) {
+    this._extSlowFactor = Math.min(this._extSlowFactor, factor);
+    this._extSlowTimer = Math.max(this._extSlowTimer, duration);
   }
 
   takeDamage(amount /* , opts */) {
@@ -90,6 +100,9 @@ export class Enemy {
     this.deathTimer = 0;
     this.killedAtReturn = null;
     this._didHit = false;
+    this._extSlowTimer = 0;
+    this._extSlowFactor = 1;
+    this._scoreAwarded = false;
     this.fsm.set('IDLE', this, true);
   }
 
@@ -144,7 +157,12 @@ export class Enemy {
       this.deathTimer += dt;
       return;
     }
-    const slow = env.speedFactor != null ? env.speedFactor : 1;
+    let slow = env.speedFactor != null ? env.speedFactor : 1;
+    if (this._extSlowTimer > 0) {
+      this._extSlowTimer -= dt;
+      slow *= this._extSlowFactor;
+      if (this._extSlowTimer <= 0) this._extSlowFactor = 1;
+    }
     this.behave(dt, env, slow);
   }
 

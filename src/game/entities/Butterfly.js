@@ -1,14 +1,8 @@
-// The Hornet craft — the offensive specialist. A ranged attacker.
+// The Butterfly craft — a Garden specialist. A graceful glider.
 //
-// Shares the Bee/Moth/Locust craft interface so main.js treats it uniformly.
-// Movement, health, landing and world-collision patterns are copied from the
-// other crafts; the combat mechanic is unique: a Projectile Sting fired in the
-// current facing direction. Projectiles fly straight, deal flat damage on the
-// first enemy they touch, and expire on hit or after travelling PROJ_RANGE.
-//
-// Projectiles are updated/collided via updateProjectiles(dt, queryEnemies),
-// called by main.js after the entity's own update() each PLAYING frame, and
-// rendered as part of draw(ctx, t) (world transform already applied).
+// Shares the Bee/Moth/Locust/Hornet craft interface so main.js treats it
+// uniformly. Combat is unique: a Glide Dash that phases over thorns and enemies
+// (no recoil), with a follow-up Petal Burst if the attack is held after landing.
 
 import { StateMachine } from '../engine/StateMachine.js';
 import { COLORS, rgba } from '../utils/renderer.js';
@@ -20,28 +14,32 @@ import {
   smoothLerp,
 } from '../utils/math.js';
 
-const BASE_SPEED = 200; // px/s — between the bee and the moth
+const BASE_SPEED = 240; // px/s — nimble
 const ACCEL_LERP = 0.15;
 const FACE_LERP = 0.25;
 
-const MAX_HP = 90;
-const MAX_CARRY = 8; // pollen (count) — attack disabled above this
+const MAX_HP = 70;
+const MAX_CARRY = 8;
 
 const DR_PER_LEVEL = 0.05;
 const THORN_DAMAGE = 8;
 const HIT_IFRAME = 0.8;
 
-// Projectile Sting.
-const PROJ_SPEED = 420; // px/s
-const PROJ_DAMAGE = 45; // flat damage per hit
-const PROJ_RANGE = 350; // px before a projectile expires
-const PROJ_RADIUS = 5; // collision radius
-const PROJ_COOLDOWN = 0.5; // seconds between shots
-const TRAIL_LEN = 4; // ink-line trail points behind each projectile
+const DASH_DISTANCE = 120; // px
+const DASH_DURATION = 0.18; // s
+const DASH_COOLDOWN = 0.6; // s base
+const DASH_DAMAGE = 30; // flat damage to enemies passed through (no recoil)
 
-export class Hornet {
+const PETAL_CHARGE = 0.4; // s of held attack after a glide dash to release the burst
+const PETAL_RADIUS = 80; // AoE radius
+const PETAL_DAMAGE = 15; // T1 flat damage
+const PETAL_SLOW = 0.4; // enemy speed factor while slowed
+const PETAL_SLOW_TIME = 3; // s
+const PETAL_FX = 0.4; // s burst visual
+
+export class Butterfly {
   constructor(x, y, upgrades = {}) {
-    this.craftType = 'hornet';
+    this.craftType = 'butterfly';
     this.x = x;
     this.y = y;
     this.radius = 12;
@@ -66,20 +64,25 @@ export class Hornet {
 
     this.invincibleTimer = 0;
     this.thornHitCooldown = 0;
-    this.attackCooldown = 0;
+    this.dashCooldown = 0;
     this.wingPhase = 0;
 
-    // Active projectiles: { x, y, vx, vy, distanceTraveled, active, trail[] }.
-    this.projectiles = [];
+    this._dashDir = 0;
+    this._dashTraveled = 0;
+    this._dashHits = new Set();
+    this._petalArmed = false;
+    this._petalCharge = 0;
+    this._petalFx = 0; // burst FX timer
+    this._petalX = 0;
+    this._petalY = 0;
 
     this.fsm = new StateMachine('FLYING', {
-      FLYING: {}, INVINCIBLE: {}, LANDING: {}, LANDED: {}, DOCKED: {}, DEAD: {},
+      FLYING: {}, DASHING: {}, INVINCIBLE: {}, LANDING: {}, LANDED: {}, DOCKED: {}, DEAD: {},
     });
 
-    // Upgrade bases. Hornet's attack is ranged (no dash) → _baseDashCooldown = 0.
     this._baseCapacity = MAX_CARRY;
-    this._baseDashCooldown = 0;
-    this.dashCooldownBase = 0;
+    this._baseDashCooldown = DASH_COOLDOWN;
+    this.dashCooldownBase = DASH_COOLDOWN;
     this.baseCollectionRadius = 60;
     this.comboWindowBonus = 0;
     this.applyUpgrades(upgrades);
@@ -110,7 +113,7 @@ export class Hornet {
   }
 
   canAttack() {
-    return this.fsm.is('FLYING') && !this.overCapacity && this.attackCooldown <= 0;
+    return this.fsm.is('FLYING') && !this.overCapacity && this.dashCooldown <= 0;
   }
 
   applyUpgrades(upgrades) {
@@ -181,10 +184,11 @@ export class Hornet {
 
   // ---- per-frame update ----
   update(dt, env) {
-    this.wingPhase += dt * 26; // rapid, aggressive wingbeat
+    this.wingPhase += dt * (this.fsm.is('DASHING') ? 20 : 10);
     if (this.invincibleTimer > 0) this.invincibleTimer -= dt;
     if (this.thornHitCooldown > 0) this.thornHitCooldown -= dt;
-    if (this.attackCooldown > 0) this.attackCooldown -= dt;
+    if (this.dashCooldown > 0) this.dashCooldown -= dt;
+    if (this._petalFx > 0) this._petalFx -= dt;
     this.fsm.update(dt);
 
     if (this.isDead()) {
@@ -194,8 +198,28 @@ export class Hornet {
       return;
     }
 
+    if (this.fsm.is('DASHING')) {
+      this._updateDash(dt, env);
+      this._applyWorld(dt, env, /* dashing */ true);
+      return;
+    }
+
     if (env.healPressed) this.useHealingItem();
-    if (env.attackPressed && this.canAttack()) this._fire(env);
+
+    // Petal Burst: charges while the attack is held after a glide dash lands.
+    if (this._petalArmed) {
+      if (env.attackHeld) {
+        this._petalCharge += dt;
+        if (this._petalCharge >= PETAL_CHARGE) {
+          this._firePetalBurst(env);
+          this._petalArmed = false;
+        }
+      } else {
+        this._petalArmed = false;
+      }
+    }
+
+    if (env.attackPressed && this.canAttack()) this._startDash();
 
     const mv = env.moveVec || { x: 0, y: 0 };
     const moving = mv.x !== 0 || mv.y !== 0;
@@ -207,72 +231,68 @@ export class Hornet {
       this.facing = normalizeAngle(this.facing + angleDiff(target, this.facing) * FACE_LERP);
     }
 
-    this._applyWorld(dt, env);
+    this._applyWorld(dt, env, false);
   }
 
-  // Spawn a projectile from the hornet's nose in the current facing direction.
-  _fire(env) {
-    this.attackCooldown = PROJ_COOLDOWN;
-    const cos = Math.cos(this.facing);
-    const sin = Math.sin(this.facing);
-    const muzzle = this.radius + 6;
-    this.projectiles.push({
-      x: this.x + cos * muzzle,
-      y: this.y + sin * muzzle,
-      vx: cos * PROJ_SPEED,
-      vy: sin * PROJ_SPEED,
-      distanceTraveled: 0,
-      active: true,
-      trail: [],
-    });
-    if (env.effects) env.effects.screenShake(2, 120);
+  _startDash() {
+    this.fsm.set('DASHING', this);
+    this._dashDir = this.facing;
+    this._dashTraveled = 0;
+    this._dashHits.clear();
+    this._petalArmed = false;
+    this.dashCooldown = this.dashCooldownBase || DASH_COOLDOWN;
   }
 
-  /**
-   * Move and collide every active projectile. Called by main.js each PLAYING
-   * frame after update(). `queryEnemies(x, y, r)` returns nearby live enemies
-   * via the spatial grid. Ranged hits always deal full flat damage regardless
-   * of the enemy's facing (unlike the melee crafts).
-   */
-  updateProjectiles(dt, queryEnemies) {
-    if (this.projectiles.length === 0) return;
-    for (const p of this.projectiles) {
-      if (!p.active) continue;
+  _updateDash(dt, env) {
+    const speed = DASH_DISTANCE / DASH_DURATION;
+    this.vx = Math.cos(this._dashDir) * speed;
+    this.vy = Math.sin(this._dashDir) * speed;
+    this._dashTraveled += speed * dt;
 
-      // Record a short fading trail behind the projectile.
-      p.trail.push({ x: p.x, y: p.y });
-      if (p.trail.length > TRAIL_LEN) p.trail.shift();
-
-      const step = Math.hypot(p.vx, p.vy) * dt;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.distanceTraveled += step;
-
-      if (queryEnemies) {
-        const near = queryEnemies(p.x, p.y, PROJ_RADIUS + 32);
-        for (const enemy of near) {
-          if (enemy.dead) continue;
-          const reach = PROJ_RADIUS + (enemy.radius || 0);
-          if (distance(p, enemy) <= reach) {
-            enemy.takeDamage(PROJ_DAMAGE);
-            p.active = false;
-            break;
-          }
+    // Phase through enemies: deal damage once each, no recoil to the player.
+    if (env.queryEnemies) {
+      const near = env.queryEnemies(this.x, this.y, 52);
+      for (const e of near) {
+        if (e.dead || this._dashHits.has(e)) continue;
+        if (distance(this, e) <= this.radius + (e.radius || 14) + 8) {
+          e.takeDamage(DASH_DAMAGE, { source: 'butterfly' });
+          this._dashHits.add(e);
         }
       }
-
-      if (p.distanceTraveled >= PROJ_RANGE) p.active = false;
     }
-    this.projectiles = this.projectiles.filter((p) => p.active);
+
+    if (this._dashTraveled >= DASH_DISTANCE) {
+      this.fsm.set('FLYING', this);
+      this._petalArmed = true; // open the held-attack window for the petal burst
+      this._petalCharge = 0;
+    }
   }
 
-  _applyWorld(dt, env) {
+  _firePetalBurst(env) {
+    this._petalFx = PETAL_FX;
+    this._petalX = this.x;
+    this._petalY = this.y;
+    if (env.queryEnemies) {
+      const near = env.queryEnemies(this.x, this.y, PETAL_RADIUS + 30);
+      for (const e of near) {
+        if (e.dead) continue;
+        if (distance(e, this) <= PETAL_RADIUS + (e.radius || 0)) {
+          e.takeDamage(PETAL_DAMAGE, { source: 'butterfly' });
+          if (e.applyExternalSlow) e.applyExternalSlow(PETAL_SLOW, PETAL_SLOW_TIME);
+        }
+      }
+    }
+    if (env.effects) env.effects.screenShake(2, 150);
+  }
+
+  _applyWorld(dt, env, dashing) {
     const prevX = this.x;
     const prevY = this.y;
     let nx = this.x + this.vx * dt;
     let ny = this.y + this.vy * dt;
 
-    if (env.meadow) {
+    // Glide dash phases over thorns + wind; normal flight resolves them.
+    if (env.meadow && !dashing) {
       const wind = env.meadow.windForceAt(this.x, this.y);
       if (wind) {
         nx += wind.x * dt;
@@ -308,10 +328,20 @@ export class Hornet {
     if (!this.isDead()) this.fsm.set('FLYING', this);
   }
 
-  // ---- rendering (camera transform already applied) ----
+  // ---- rendering ----
   draw(ctx, t) {
-    // Projectiles first, in world space, under the body.
-    this._drawProjectiles(ctx);
+    // Petal burst ring (world space, under the body).
+    if (this._petalFx > 0) {
+      const k = 1 - this._petalFx / PETAL_FX;
+      ctx.save();
+      ctx.globalAlpha = 0.5 * (1 - k);
+      ctx.strokeStyle = rgba('#C8A8D4', 0.95);
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(this._petalX, this._petalY, PETAL_RADIUS * k, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     const flashing = this.invincibleTimer > 0 && !this.damageImmune;
     if (flashing && Math.floor(t * 20) % 2 === 0) return;
@@ -325,105 +355,52 @@ export class Hornet {
       ctx.globalAlpha = 0.25 + 0.1 * Math.sin(t * 6);
       ctx.fillStyle = rgba(COLORS.crimson, 1);
       ctx.beginPath();
-      ctx.arc(0, 0, 21, 0, Math.PI * 2);
+      ctx.arc(0, 0, 22, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
 
-    // Narrow, angular wings (sharper and tighter than the bee's).
-    const flap = Math.sin(this.wingPhase) * 0.3;
-    ctx.fillStyle = 'rgba(255,255,255,0.28)';
-    ctx.strokeStyle = rgba(COLORS.ink, 0.75);
+    // Four large wings (two per side), slow flutter.
+    const flutter = Math.sin(this.wingPhase) * 0.3;
+    ctx.strokeStyle = rgba(COLORS.ink, 0.6);
     ctx.lineWidth = 1.1;
     for (const side of [-1, 1]) {
       ctx.save();
-      ctx.rotate(side * (0.45 + flap));
+      ctx.rotate(side * (0.5 + flutter));
+      // upper wing
+      ctx.fillStyle = 'rgba(200,168,212,0.7)';
       ctx.beginPath();
-      ctx.moveTo(0, -1);
-      ctx.lineTo(side * 6, -3);
-      ctx.lineTo(side * 13, 3);
-      ctx.lineTo(0, 4);
-      ctx.closePath();
+      ctx.ellipse(side * 11, -6, 11, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // lower wing
+      ctx.fillStyle = 'rgba(180,150,196,0.65)';
+      ctx.beginPath();
+      ctx.ellipse(side * 9, 7, 8, 7, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.restore();
     }
 
-    // Sleek elongated teardrop body (~16×30): pointed abdomen toward the tail.
+    // Elongated body (~10×20) in pale lavender.
     ctx.beginPath();
-    ctx.moveTo(0, -14); // nose
-    ctx.quadraticCurveTo(8, -8, 7, 2);
-    ctx.quadraticCurveTo(5, 14, 0, 16); // tapered stinger tail
-    ctx.quadraticCurveTo(-5, 14, -7, 2);
-    ctx.quadraticCurveTo(-8, -8, 0, -14);
-    ctx.closePath();
-    ctx.fillStyle = '#8B6914';
+    ctx.ellipse(0, 0, 5, 10, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#C8A8D4';
     ctx.fill();
     ctx.lineWidth = 1.4;
     ctx.strokeStyle = COLORS.ink;
     ctx.stroke();
 
-    // Thin ink-line stripes across the abdomen.
-    ctx.strokeStyle = rgba(COLORS.ink, 0.9);
-    ctx.lineWidth = 1.2;
-    for (const oy of [-2, 3, 8]) {
-      ctx.beginPath();
-      ctx.moveTo(-6, oy);
-      ctx.lineTo(6, oy);
-      ctx.stroke();
-    }
-
-    // Head + short antennae.
-    ctx.beginPath();
-    ctx.arc(0, -12, 2.6, 0, Math.PI * 2);
-    ctx.fillStyle = COLORS.ink;
-    ctx.fill();
+    // Antennae.
     ctx.strokeStyle = rgba(COLORS.ink, 0.85);
     ctx.lineWidth = 1;
     for (const side of [-1, 1]) {
       ctx.beginPath();
-      ctx.moveTo(side * 1.5, -13);
-      ctx.lineTo(side * 5, -19);
+      ctx.moveTo(side * 1.5, -9);
+      ctx.quadraticCurveTo(side * 6, -15, side * 4, -19);
       ctx.stroke();
     }
 
     ctx.restore();
-  }
-
-  _drawProjectiles(ctx) {
-    for (const p of this.projectiles) {
-      // Fading ink-line trail behind the projectile.
-      for (let i = 0; i < p.trail.length; i++) {
-        const pt = p.trail[i];
-        const a = ((i + 1) / (p.trail.length + 1)) * 0.5;
-        ctx.save();
-        ctx.globalAlpha = a;
-        ctx.strokeStyle = rgba(COLORS.ink, 0.8);
-        ctx.lineWidth = 1.4;
-        const next = i < p.trail.length - 1 ? p.trail[i + 1] : p;
-        ctx.beginPath();
-        ctx.moveTo(pt.x, pt.y);
-        ctx.lineTo(next.x, next.y);
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      // Small elongated teardrop (~8×4) oriented along travel direction.
-      const ang = Math.atan2(p.vy, p.vx);
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(ang);
-      ctx.beginPath();
-      ctx.moveTo(4, 0); // tip
-      ctx.quadraticCurveTo(0, 2, -4, 0);
-      ctx.quadraticCurveTo(0, -2, 4, 0);
-      ctx.closePath();
-      ctx.fillStyle = '#D4A83F';
-      ctx.fill();
-      ctx.lineWidth = 0.8;
-      ctx.strokeStyle = rgba(COLORS.ink, 0.7);
-      ctx.stroke();
-      ctx.restore();
-    }
   }
 }

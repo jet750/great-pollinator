@@ -1,14 +1,8 @@
-// The Moth craft — a faster, frailer alternative to the Bee.
+// The Dragonfly craft — a Greenhouse specialist. The fastest flyer.
 //
-// Shares the Bee's public interface (see the JSDoc "craft interface" below) so
-// main.js can treat any active craft uniformly. Movement, health, landing and
-// world-collision patterns are copied from Bee.js; the combat mechanic is
-// unique: a short-range "Frontal Consume" pulse that clears mobile enemies.
-//
-// Craft interface (Bee / Moth / Locust all expose):
-//   props:   x, y, radius, hp, maxHp, carried, maxCarry, facing, vx, vy
-//   methods: update(dt, env), draw(ctx, t), takeDamage(amount) → dead?,
-//            getCarriedTotal()
+// Shares the craft interface. Its Phase Dash grants a full invincibility frame
+// for the entire dash duration — every dash is a free i-window — while also
+// dealing pass-through damage to enemies it crosses (no recoil to the player).
 
 import { StateMachine } from '../engine/StateMachine.js';
 import { COLORS, rgba } from '../utils/renderer.js';
@@ -20,46 +14,42 @@ import {
   smoothLerp,
 } from '../utils/math.js';
 
-const BASE_SPEED = 220; // px/s — faster than the bee
-const ACCEL_LERP = 0.15;
-const FACE_LERP = 0.25;
+const BASE_SPEED = 260; // px/s — fastest craft
+const ACCEL_LERP = 0.16;
+const FACE_LERP = 0.26;
 
-const MAX_HP = 80;
-const MAX_CARRY = 5; // pollen (count)
+const MAX_HP = 95;
+const MAX_CARRY = 9;
 
 const DR_PER_LEVEL = 0.05;
 const THORN_DAMAGE = 8;
 const HIT_IFRAME = 0.8;
 
-const CONSUME_RADIUS = 60;
-const CONSUME_DAMAGE = 50;
-const CONSUME_COOLDOWN = 0.8; // 800ms
-const CONSUME_FX = 0.2; // 200ms expanding ink-burst
-const FRONT_OFFSET = 20; // pulse center ahead of the moth
+const DASH_DISTANCE = 100; // px
+const DASH_DURATION = 0.15; // s — full invincibility window
+const DASH_COOLDOWN = 0.6; // s base
+const DASH_DAMAGE = 30; // flat pass-through damage
 
-export class Moth {
+export class Dragonfly {
   constructor(x, y, upgrades = {}) {
-    this.craftType = 'moth';
+    this.craftType = 'dragonfly';
     this.x = x;
     this.y = y;
-    this.radius = 12;
+    this.radius = 11;
     this.vx = 0;
     this.vy = 0;
     this.facing = -Math.PI / 2;
 
-    // Crafts have fixed HP; the damage-reduction upgrade still applies on hit.
     this.maxHp = MAX_HP;
     this.hp = this.maxHp;
     this.drLevel = upgrades.damageReduction || 0;
     this.healingItems = upgrades.healingItems || 0;
 
-    // pollen (count-based capacity for crafts)
     this.carried = { common: 0, uncommon: 0, rare: 0 };
     this.carriedBonus = 0;
     this.collectedCount = 0;
     this.maxCarry = MAX_CARRY;
 
-    // per-frame modifiers set by main
     this.collectionRadius = 60;
     this.damageImmune = false;
     this.weatherMultiplier = 1;
@@ -67,21 +57,21 @@ export class Moth {
 
     this.invincibleTimer = 0;
     this.thornHitCooldown = 0;
-    this.attackCooldown = 0;
+    this.dashCooldown = 0;
     this.wingPhase = 0;
 
-    this._consumeTimer = 0; // counts down the burst FX
-    this._consumeX = 0;
-    this._consumeY = 0;
+    this._dashDir = 0;
+    this._dashTraveled = 0;
+    this._dashHits = new Set();
+    this._preDashImmune = false; // damageImmune value to restore after a phase dash
 
     this.fsm = new StateMachine('FLYING', {
-      FLYING: {}, INVINCIBLE: {}, LANDING: {}, LANDED: {}, DOCKED: {}, DEAD: {},
+      FLYING: {}, DASHING: {}, INVINCIBLE: {}, LANDING: {}, LANDED: {}, DOCKED: {}, DEAD: {},
     });
 
-    // Upgrade bases. Moth has no dash attack → _baseDashCooldown = 0.
     this._baseCapacity = MAX_CARRY;
-    this._baseDashCooldown = 0;
-    this.dashCooldownBase = 0;
+    this._baseDashCooldown = DASH_COOLDOWN;
+    this.dashCooldownBase = DASH_COOLDOWN;
     this.baseCollectionRadius = 60;
     this.comboWindowBonus = 0;
     this.applyUpgrades(upgrades);
@@ -112,7 +102,7 @@ export class Moth {
   }
 
   canAttack() {
-    return this.fsm.is('FLYING') && !this.overCapacity && this.attackCooldown <= 0;
+    return this.fsm.is('FLYING') && !this.overCapacity && this.dashCooldown <= 0;
   }
 
   applyUpgrades(upgrades) {
@@ -183,11 +173,10 @@ export class Moth {
 
   // ---- per-frame update ----
   update(dt, env) {
-    this.wingPhase += dt * 22; // faster wingbeat than bee
+    this.wingPhase += dt * (this.fsm.is('DASHING') ? 40 : 30);
     if (this.invincibleTimer > 0) this.invincibleTimer -= dt;
     if (this.thornHitCooldown > 0) this.thornHitCooldown -= dt;
-    if (this.attackCooldown > 0) this.attackCooldown -= dt;
-    if (this._consumeTimer > 0) this._consumeTimer -= dt;
+    if (this.dashCooldown > 0) this.dashCooldown -= dt;
     this.fsm.update(dt);
 
     if (this.isDead()) {
@@ -197,8 +186,15 @@ export class Moth {
       return;
     }
 
+    if (this.fsm.is('DASHING')) {
+      this.damageImmune = true; // full invincibility for the whole dash
+      this._updateDash(dt, env);
+      this._applyWorld(dt, env, true);
+      return;
+    }
+
     if (env.healPressed) this.useHealingItem();
-    if (env.attackPressed && this.canAttack()) this._consume(env);
+    if (env.attackPressed && this.canAttack()) this._startDash();
 
     const mv = env.moveVec || { x: 0, y: 0 };
     const moving = mv.x !== 0 || mv.y !== 0;
@@ -210,46 +206,59 @@ export class Moth {
       this.facing = normalizeAngle(this.facing + angleDiff(target, this.facing) * FACE_LERP);
     }
 
-    this._applyWorld(dt, env);
+    this._applyWorld(dt, env, false);
   }
 
-  // Frontal Consume: a 60px pulse on the moth's front. Ignores Carnivorous
-  // Plants (immuneToMoth); 50 flat to every other enemy inside the radius.
-  _consume(env) {
-    this.attackCooldown = CONSUME_COOLDOWN;
-    this._consumeTimer = CONSUME_FX;
-    const fx = this.x + Math.cos(this.facing) * FRONT_OFFSET;
-    const fy = this.y + Math.sin(this.facing) * FRONT_OFFSET;
-    this._consumeX = fx;
-    this._consumeY = fy;
+  _startDash() {
+    this.fsm.set('DASHING', this);
+    this._dashDir = this.facing;
+    this._dashTraveled = 0;
+    this._dashHits.clear();
+    this._preDashImmune = this.damageImmune;
+    this.dashCooldown = this.dashCooldownBase || DASH_COOLDOWN;
+  }
+
+  _updateDash(dt, env) {
+    const speed = DASH_DISTANCE / DASH_DURATION;
+    this.vx = Math.cos(this._dashDir) * speed;
+    this.vy = Math.sin(this._dashDir) * speed;
+    this._dashTraveled += speed * dt;
+
     if (env.queryEnemies) {
-      const near = env.queryEnemies(fx, fy, CONSUME_RADIUS + 20);
-      for (const enemy of near) {
-        if (enemy.dead || enemy.immuneToMoth) continue;
-        if (distance(enemy, { x: fx, y: fy }) <= CONSUME_RADIUS + (enemy.radius || 0)) {
-          enemy.takeDamage(CONSUME_DAMAGE);
+      const near = env.queryEnemies(this.x, this.y, 48);
+      for (const e of near) {
+        if (e.dead || this._dashHits.has(e)) continue;
+        if (distance(this, e) <= this.radius + (e.radius || 14) + 6) {
+          e.takeDamage(DASH_DAMAGE, { source: 'dragonfly' });
+          this._dashHits.add(e);
         }
       }
     }
-    if (env.effects) env.effects.screenShake(3, 160);
+
+    if (this._dashTraveled >= DASH_DISTANCE) {
+      this.fsm.set('FLYING', this);
+      this.damageImmune = this._preDashImmune; // restore pre-dash immunity state
+    }
   }
 
-  _applyWorld(dt, env) {
+  _applyWorld(dt, env, dashing) {
     const prevX = this.x;
     const prevY = this.y;
     let nx = this.x + this.vx * dt;
     let ny = this.y + this.vy * dt;
 
     if (env.meadow) {
-      const wind = env.meadow.windForceAt(this.x, this.y);
-      if (wind) {
-        nx += wind.x * dt;
-        ny += wind.y * dt;
+      if (!dashing) {
+        const wind = env.meadow.windForceAt(this.x, this.y);
+        if (wind) {
+          nx += wind.x * dt;
+          ny += wind.y * dt;
+        }
       }
       const res = env.meadow.resolveThornCollision(prevX, prevY, nx, ny, this.radius);
       nx = res.x;
       ny = res.y;
-      if (res.damaged && this.thornHitCooldown <= 0) {
+      if (res.damaged && !dashing && this.thornHitCooldown <= 0) {
         this.takeFlatDamage(THORN_DAMAGE);
         this.thornHitCooldown = 0.6;
       }
@@ -281,76 +290,72 @@ export class Moth {
     const flashing = this.invincibleTimer > 0 && !this.damageImmune;
     if (flashing && Math.floor(t * 20) % 2 === 0) return;
 
-    // Consume burst (drawn under the body, in world space).
-    if (this._consumeTimer > 0) {
-      const k = 1 - this._consumeTimer / CONSUME_FX; // 0 → 1
-      ctx.save();
-      ctx.globalAlpha = 0.5 * (1 - k);
-      ctx.strokeStyle = rgba(COLORS.ink, 0.9);
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(this._consumeX, this._consumeY, CONSUME_RADIUS * k, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.facing + Math.PI / 2);
 
-    if (this.damageImmune) {
+    // Phase-dash shimmer (iridescent aura during the i-window).
+    if (this.fsm.is('DASHING')) {
+      ctx.save();
+      ctx.globalAlpha = 0.3 + 0.15 * Math.sin(t * 30);
+      ctx.fillStyle = rgba('#4A9AA0', 1);
+      ctx.beginPath();
+      ctx.arc(0, 0, 18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else if (this.damageImmune) {
       ctx.save();
       ctx.globalAlpha = 0.25 + 0.1 * Math.sin(t * 6);
       ctx.fillStyle = rgba(COLORS.crimson, 1);
       ctx.beginPath();
-      ctx.arc(0, 0, 22, 0, Math.PI * 2);
+      ctx.arc(0, 0, 20, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
 
-    // Large rounded wings (wider than the bee), semi-transparent.
-    const flap = Math.sin(this.wingPhase) * 0.35;
-    ctx.fillStyle = 'rgba(200,180,160,0.6)';
-    ctx.strokeStyle = rgba(COLORS.ink, 0.7);
-    ctx.lineWidth = 1.2;
+    // Four narrow horizontal wing pairs extending wide.
+    const flap = Math.sin(this.wingPhase) * 0.18;
+    ctx.fillStyle = 'rgba(255,255,255,0.26)';
+    ctx.strokeStyle = rgba(COLORS.ink, 0.6);
+    ctx.lineWidth = 1;
     for (const side of [-1, 1]) {
-      ctx.save();
-      ctx.rotate(side * (0.6 + flap));
-      ctx.beginPath();
-      ctx.ellipse(side * 11, -1, 13, 8, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
+      for (const oy of [-6, 2]) {
+        ctx.save();
+        ctx.rotate(side * flap);
+        ctx.beginPath();
+        ctx.ellipse(side * 14, oy, 14, 3.2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
     }
 
-    // Elongated cream-brown body (~28×18).
+    // Long thin segmented body (~8×28).
     ctx.beginPath();
-    ctx.ellipse(0, 0, 9, 14, 0, 0, Math.PI * 2);
-    ctx.fillStyle = '#C8B89A';
+    ctx.ellipse(0, 0, 4, 14, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#4A9AA0';
     ctx.fill();
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = 1.3;
     ctx.strokeStyle = COLORS.ink;
     ctx.stroke();
 
-    // Body segmentation.
-    ctx.strokeStyle = rgba(COLORS.ink, 0.6);
+    // 3 segment arcs.
+    ctx.strokeStyle = rgba(COLORS.ink, 0.7);
     ctx.lineWidth = 1;
-    for (const oy of [-4, 0, 4, 8]) {
+    for (const oy of [-4, 2, 8]) {
       ctx.beginPath();
-      ctx.moveTo(-6, oy);
-      ctx.lineTo(6, oy);
+      ctx.arc(0, oy, 4, 0.15 * Math.PI, 0.85 * Math.PI);
       ctx.stroke();
     }
 
-    // Long, curved antennae.
-    ctx.strokeStyle = rgba(COLORS.ink, 0.85);
-    ctx.lineWidth = 1.2;
-    for (const side of [-1, 1]) {
-      ctx.beginPath();
-      ctx.moveTo(side * 2, -12);
-      ctx.quadraticCurveTo(side * 9, -20, side * 5, -26);
-      ctx.stroke();
-    }
+    // Head + large compound eyes.
+    ctx.beginPath();
+    ctx.arc(0, -13, 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#2E6B70';
+    ctx.fill();
+    ctx.strokeStyle = COLORS.ink;
+    ctx.lineWidth = 1;
+    ctx.stroke();
 
     ctx.restore();
   }

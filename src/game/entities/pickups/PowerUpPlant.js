@@ -29,6 +29,54 @@ export const POWERUP_DEFS = {
     oneUse: true,
     effect: 'full_heal', // restores hp to maxHp immediately
   },
+  // ---- Forest plants ----
+  clover: {
+    label: 'Clover',
+    color: '#5A9A5A', // medium green
+    duration: 10,
+    effect: 'speed_burst',
+    biomeUnlock: 'forest',
+  },
+  thistle: {
+    label: 'Thistle',
+    color: '#7A5A9A', // purple
+    duration: 0,
+    effect: 'thorny_burst',
+    oneUse: false,
+    recharge: 45,
+    biomeUnlock: 'forest',
+  },
+  // ---- Garden plants ----
+  wisteria: {
+    label: 'Wisteria',
+    color: '#9A7AC8', // lavender-purple
+    duration: 20,
+    effect: 'pollen_double',
+    biomeUnlock: 'garden',
+  },
+  orchid: {
+    label: 'Orchid',
+    color: '#E8A0C8', // pale pink
+    duration: 8,
+    effect: 'full_immunity',
+    biomeUnlock: 'garden',
+  },
+  // ---- Greenhouse plants ----
+  pitcherPlant: {
+    label: 'Pitcher Plant',
+    color: '#3A6A3A', // deep green
+    duration: 0,
+    effect: 'pollen_magnet_burst',
+    oneUse: true,
+    biomeUnlock: 'greenhouse',
+  },
+  ghostOrchid: {
+    label: 'Ghost Orchid',
+    color: '#D8F0F0', // pale ice blue
+    duration: 15,
+    effect: 'slow_motion',
+    biomeUnlock: 'greenhouse',
+  },
 };
 
 const TRIGGER_RADIUS = 40;
@@ -45,6 +93,7 @@ export class PowerUpPlant {
     this.effect = def.effect || null;
     this.rarity = def.rarity || 'common';
     this.oneUse = !!def.oneUse;
+    this.recharge = def.recharge || RECHARGE; // per-plant recharge (s)
     this.radius = TRIGGER_RADIUS;
     this.kind = 'plant';
 
@@ -73,7 +122,7 @@ export class PowerUpPlant {
       return;
     }
     this.available = false;
-    this.rechargeTimer = RECHARGE;
+    this.rechargeTimer = this.recharge;
   }
 
   draw(ctx, t) {
@@ -116,9 +165,112 @@ export class PowerUpPlant {
       case 'ironweed':
         this._drawRose(ctx);
         break;
+      case 'clover':
+        this._drawClover(ctx);
+        break;
+      case 'thistle':
+        this._drawThistle(ctx);
+        break;
+      case 'wisteria':
+        this._drawWisteria(ctx);
+        break;
+      case 'orchid':
+        this._drawOrchid(ctx);
+        break;
+      case 'pitcherPlant':
+        this._drawPitcher(ctx);
+        break;
+      case 'ghostOrchid':
+        this._drawGhostOrchid(ctx);
+        break;
       default:
         break;
     }
+    ctx.restore();
+  }
+
+  // Three flower heads in a triangle — reads clearly as a clover.
+  _drawClover(ctx) {
+    for (const a of [0, (2 * Math.PI) / 3, (4 * Math.PI) / 3]) {
+      ctx.save();
+      ctx.translate(Math.cos(a - Math.PI / 2) * 9, Math.sin(a - Math.PI / 2) * 9 - 4);
+      drawFlower(ctx, 10, 4, '#5A9A5A', '#3A7A3A');
+      ctx.restore();
+    }
+  }
+
+  // Flower head with spiky rays — a thistle.
+  _drawThistle(ctx) {
+    ctx.save();
+    ctx.translate(0, -4);
+    ctx.strokeStyle = '#9A8AAA';
+    ctx.lineWidth = 1.4;
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * 14, Math.sin(a) * 14);
+      ctx.lineTo(Math.cos(a) * 22, Math.sin(a) * 22);
+      ctx.stroke();
+    }
+    drawFlower(ctx, 16, 12, '#7A5A9A', '#5A3A7A');
+    ctx.restore();
+  }
+
+  // A drooping cluster of small blossoms — wisteria.
+  _drawWisteria(ctx) {
+    ctx.save();
+    for (let i = 0; i < 5; i++) {
+      ctx.save();
+      ctx.translate(i * 2 - 4, -2 + i * 5); // curve downward
+      drawFlower(ctx, 8, 5, '#9A7AC8', '#7A5AA8');
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  // Asymmetric petal grouping (3 + 2) — an orchid silhouette.
+  _drawOrchid(ctx) {
+    ctx.save();
+    ctx.translate(0, -4);
+    drawFlower(ctx, 20, 3, '#E8A0C8', '#C880A8');
+    ctx.rotate(Math.PI / 3);
+    drawFlower(ctx, 13, 2, '#E8A0C8', '#C880A8');
+    ctx.restore();
+  }
+
+  // A rounded vase with a small lid flower — a pitcher plant.
+  _drawPitcher(ctx) {
+    ctx.save();
+    ctx.translate(0, -2);
+    ctx.beginPath();
+    ctx.moveTo(-8, -16);
+    ctx.bezierCurveTo(-14, 0, -10, 16, 0, 16);
+    ctx.bezierCurveTo(10, 16, 14, 0, 8, -16);
+    ctx.quadraticCurveTo(0, -10, -8, -16);
+    ctx.closePath();
+    ctx.fillStyle = '#3A6A3A';
+    ctx.fill();
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = rgba(COLORS.ink, 0.6);
+    ctx.stroke();
+    // lid flower
+    ctx.save();
+    ctx.translate(0, -16);
+    drawFlower(ctx, 8, 5, '#5A9A5A', '#3A7A3A');
+    ctx.restore();
+    ctx.restore();
+  }
+
+  // Pale, glowing orchid — the ghost orchid.
+  _drawGhostOrchid(ctx) {
+    ctx.save();
+    ctx.translate(0, -4);
+    // soft glow halo
+    ctx.globalAlpha = 0.2;
+    drawFlower(ctx, 20, 6, '#D8F0F0', '#C8E8E8', { ink: false });
+    ctx.globalAlpha = 1;
+    ctx.translate(1, 1);
+    drawFlower(ctx, 18, 6, '#D8F0F0', '#B8E0E0');
     ctx.restore();
   }
 
@@ -279,6 +431,30 @@ export class PowerUpPlant {
         ctx.quadraticCurveTo(r * 0.7, -r * 0.3, r * 0.4, r);
         ctx.lineTo(-r * 0.4, r);
         ctx.quadraticCurveTo(-r * 0.7, -r * 0.3, 0, -r);
+        ctx.fill();
+        break;
+      }
+      case 'orchid': {
+        // pale pink immunity bloom
+        ctx.fillStyle = '#E8A0C8';
+        for (let i = 0; i < 5; i++) {
+          const a = (i / 5) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.ellipse(Math.cos(a) * r * 0.5, Math.sin(a) * r * 0.5, r * 0.28, r * 0.45, a, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        break;
+      }
+      case 'slow_motion': {
+        // pale ice ring (slow-motion)
+        ctx.strokeStyle = '#D8F0F0';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.7, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = '#D8F0F0';
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.25, 0, Math.PI * 2);
         ctx.fill();
         break;
       }
