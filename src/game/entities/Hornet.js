@@ -121,7 +121,7 @@ export class Hornet {
     const dcLevel = upgrades.dashCooldown || 0;
     this.dashCooldownBase = this._baseDashCooldown * Math.pow(0.9, dcLevel);
     const magLevel = upgrades.magnetRadius || 0;
-    this.baseCollectionRadius = 60 + 20 * magLevel;
+    this.baseCollectionRadius = 60 + 8 * magLevel;
     this.comboWindowBonus = (upgrades.comboWindow || 0) * 0.5;
   }
 

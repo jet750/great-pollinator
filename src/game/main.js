@@ -402,8 +402,14 @@ export default class PollinatorGame {
   }
 
   /** Instantiate the requested craft at (x, y), passing the saved upgrades. */
+  /** Returns the upgrade object for the currently active craft. */
+  _craftUpgrades() {
+    const id = this.progress.upgrades.activeCraft || 'bee';
+    return this.progress.upgrades.crafts?.[id] || {};
+  }
+
   _spawnCraft(type, x, y) {
-    const upgrades = this.progress.upgrades;
+    const upgrades = this._craftUpgrades();
     switch (type) {
       case 'moth':
         return new Moth(x, y, upgrades);
@@ -800,7 +806,7 @@ export default class PollinatorGame {
         ? 0.2
         : 1;
     bee.collectionRadius =
-      this.activePowerUp && this.activePowerUp.type === 'sunflower' ? 180 : (bee.baseCollectionRadius || 60);
+      this.activePowerUp && this.activePowerUp.type === 'sunflower' ? 140 : (bee.baseCollectionRadius || 60);
     bee.damageImmune = !!(
       this.activePowerUp && (this.activePowerUp.type === 'foxglove' || this.activePowerUp.type === 'orchid')
     );
@@ -860,8 +866,9 @@ export default class PollinatorGame {
     if (this._sumEnemyHp() < enemyHpBefore) this.audio.playHitLanded();
 
     // Persist healing-item consumption (they're a saved, purchasable stock).
-    if (bee.healingItems !== this.progress.upgrades.healingItems) {
-      this.progress.upgrades.healingItems = bee.healingItems;
+    const craftUp = this._craftUpgrades();
+    if (bee.healingItems !== craftUp.healingItems) {
+      craftUp.healingItems = bee.healingItems;
       this._save();
     }
 
@@ -1221,6 +1228,15 @@ export default class PollinatorGame {
         while (n > 0 && this.bee.addPollen('common')) n--;
         break;
       }
+      case 'enemy_clear': {
+        const range = consequence.value || 300;
+        for (const e of this.enemies) {
+          if (!e.dead && distance(this.bee, e) <= range) {
+            e.takeDamage(e.hp);
+          }
+        }
+        break;
+      }
       default:
         break;
     }
@@ -1295,32 +1311,33 @@ export default class PollinatorGame {
   _buy(upgradeId) {
     const u = UPGRADES.find((x) => x.id === upgradeId);
     if (!u) return;
-    const up = this.progress.upgrades;
+    // Per-craft upgrades: levels are tracked on the active craft's own entry.
+    const craftUp = this._craftUpgrades();
 
     // Maxed checks. Level upgrades are gated by the active biome's level cap
     // and the absolute global max.
     if (u.kind === 'level') {
       const cap = levelCapFor(this.activeBiome || 'meadow');
-      if ((up[u.id] || 0) >= cap) return; // biome cap reached
-      if ((up[u.id] || 0) >= u.globalMax) return; // absolute global max
+      if ((craftUp[u.id] || 0) >= cap) return; // biome cap reached
+      if ((craftUp[u.id] || 0) >= u.globalMax) return; // absolute global max
     }
-    if (u.kind === 'heal' && (up.healingItems || 0) >= 3) return;
-    if (u.kind === 'heal' && u.amount === 3 && (up.healingItems || 0) + 3 > 3) return;
+    if (u.kind === 'heal' && (craftUp.healingItems || 0) >= 3) return;
+    if (u.kind === 'heal' && u.amount === 3 && (craftUp.healingItems || 0) + 3 > 3) return;
 
     const available = this.progress.totalBanked + this.bee.getCarriedTotal();
     if (available < u.cost) return;
 
     this._spend(u.cost);
 
-    // Apply effect.
+    // Apply effect to the active craft's entry.
     if (u.kind === 'level') {
-      up[u.id] = (up[u.id] || 0) + 1;
+      craftUp[u.id] = (craftUp[u.id] || 0) + 1;
       // Re-derive the active craft's stats from the upgrades (Bee uses the
       // +10/level HP formula; crafts keep fixed HP but pick up damage reduction).
-      this.bee.applyUpgrades(up);
+      this.bee.applyUpgrades(craftUp);
     } else {
-      up.healingItems = Math.min(3, (up.healingItems || 0) + u.amount);
-      this.bee.healingItems = up.healingItems;
+      craftUp.healingItems = Math.min(3, (craftUp.healingItems || 0) + u.amount);
+      this.bee.healingItems = craftUp.healingItems;
     }
     this._save();
   }
@@ -1462,6 +1479,7 @@ export default class PollinatorGame {
       muteBtnRect: this._muteBtnRect,
       modifiers: this._activeModifierTags(),
       killScore: this.progress.killScore,
+      activeBiome: this.activeBiome || 'meadow',
     });
     this._renderMinimap(ctx);
     if (this.isMobile && this.state === 'PLAYING') this.joystick.draw(ctx);
@@ -1483,6 +1501,7 @@ export default class PollinatorGame {
         bee: this.bee,
         banked: this.progress.totalBanked,
         upgrades: this.progress.upgrades,
+        craftUpgrades: this._craftUpgrades(),
         w: this.LW,
         h: this.LH,
         isMobile: this.isMobile,
