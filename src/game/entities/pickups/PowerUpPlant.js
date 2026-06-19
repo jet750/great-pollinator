@@ -22,8 +22,8 @@ export const POWERUP_DEFS = {
   },
   ironweed: {
     id: 'ironweed',
-    label: 'Ironweed',
-    color: '#6B8B3A', // olive green
+    label: 'Rose',
+    color: '#C0392B', // deep red
     duration: 0, // instant use
     rarity: 'rare',
     oneUse: true,
@@ -114,7 +114,7 @@ export class PowerUpPlant {
         drawFlower(ctx, 20, 8, this.color, '#F0EBE2');
         break;
       case 'ironweed':
-        this._drawIronweed(ctx);
+        this._drawRose(ctx);
         break;
       default:
         break;
@@ -150,38 +150,51 @@ export class PowerUpPlant {
     }
   }
 
-  /** Olive-green ironweed: a small cluster of star florets atop the stem. */
-  _drawIronweed(ctx) {
+  /** Rose: five overlapping petals in deep red, arranged in a circle. */
+  _drawRose(ctx) {
     ctx.save();
-    ctx.translate(0, -2);
-    ctx.fillStyle = this.color;
-    ctx.strokeStyle = rgba(COLORS.ink, 0.5);
+    ctx.translate(0, -4);
+
+    // Five overlapping petals arranged in a circle
+    const petalColor = '#C0392B'; // deep red
+    const petalStroke = 'rgba(80, 10, 10, 0.6)';
+    ctx.strokeStyle = petalStroke;
     ctx.lineWidth = 1;
-    const spots = [
-      [0, -6],
-      [-6, 0],
-      [6, 0],
-      [-3, 6],
-      [3, 6],
-    ];
-    for (const [sx, sy] of spots) {
+
+    for (let i = 0; i < 5; i++) {
+      const angle = (i / 5) * Math.PI * 2 - Math.PI / 2;
       ctx.save();
-      ctx.translate(sx, sy);
-      for (let i = 0; i < 5; i++) {
-        const a = (i / 5) * Math.PI * 2;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(Math.cos(a) * 4, Math.sin(a) * 4);
-        ctx.lineWidth = 1.6;
-        ctx.strokeStyle = this.color;
-        ctx.stroke();
-      }
+      ctx.rotate(angle);
       ctx.beginPath();
-      ctx.arc(0, 0, 2, 0, Math.PI * 2);
-      ctx.fillStyle = mixHex(this.color, COLORS.ink, 0.3);
+      // Petal: narrow ellipse offset from center
+      ctx.ellipse(0, -8, 5, 9, 0, 0, Math.PI * 2);
+      ctx.fillStyle = petalColor;
       ctx.fill();
+      ctx.stroke();
       ctx.restore();
     }
+
+    // Inner petals (slightly smaller, rotated 36°)
+    for (let i = 0; i < 5; i++) {
+      const angle = (i / 5) * Math.PI * 2 - Math.PI / 2 + Math.PI / 5;
+      ctx.save();
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.ellipse(0, -5, 3.5, 6, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#A93226'; // slightly darker inner
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Center bud
+    ctx.beginPath();
+    ctx.arc(0, 0, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#922B21';
+    ctx.fill();
+    ctx.strokeStyle = petalStroke;
+    ctx.stroke();
+
     ctx.restore();
   }
 

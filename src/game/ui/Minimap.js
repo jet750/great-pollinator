@@ -54,7 +54,7 @@ export class Minimap {
     return this._fog;
   }
 
-  draw(ctx, { bee, meadow, x, y, size = 120 }) {
+  draw(ctx, { bee, meadow, x, y, size = 120, flowers = [], staticEnemies = [] }) {
     const scale = size / meadow.WORLD_SIZE;
     ctx.save();
     panel(ctx, x, y, size, size, {
@@ -110,6 +110,35 @@ export class Minimap {
     }
     fctx.restore();
     ctx.drawImage(fog, x, y);
+
+    // Flowers / pollen pickups — tiny dots colored by rarity
+    if (flowers && flowers.length) {
+      for (const f of flowers) {
+        const fx = x + f.x * scale;
+        const fy = y + f.y * scale;
+        ctx.beginPath();
+        ctx.arc(fx, fy, 1.5, 0, Math.PI * 2);
+        // color by type: common=gold, uncommon=ember/orange, rare=crimson
+        const dotColor = f.type === 'rare' ? '#C0392B' : f.type === 'uncommon' ? '#D4812A' : COLORS.gold;
+        ctx.fillStyle = dotColor;
+        ctx.fill();
+      }
+    }
+
+    // Stationary enemies — draw after fog so they are always visible
+    if (staticEnemies && staticEnemies.length) {
+      for (const e of staticEnemies) {
+        const ex = x + e.x * scale;
+        const ey = y + e.y * scale;
+        ctx.beginPath();
+        ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#C0392B'; // crimson — danger indicator
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+      }
+    }
 
     // player gold dot (always visible, above the fog)
     ctx.beginPath();

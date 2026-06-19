@@ -329,8 +329,8 @@ export class Bee {
         ? enemy.dashDamage(this.attackDamage * 0.5, false)
         : this.attackDamage * 0.5;
       enemy.takeDamage(dmg, { fromDash: true });
-      // 25% of the enemy's base damage back to the player, no i-frame granted.
-      this.takeDamage((enemy.damage || 0) * 0.25, { ignoreIFrames: true, applyIFrame: false });
+      // Frontal hit: deal reduced damage to enemy but no recoil to player.
+      // Player only takes damage when enemies actively hit them.
     }
   }
 

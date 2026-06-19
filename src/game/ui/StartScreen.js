@@ -38,27 +38,28 @@ export const StartScreen = {
     ctx.globalAlpha = 1;
 
     const cx = w / 2;
-    let y = h * 0.13;
+    let y = h * 0.10; // start a bit higher
 
+    // Title
     const titleSize = fitFont(ctx, 'THE GREAT POLLINATOR', FONTS.title, isMobile ? 34 : 42, w - 40, '700');
     text(ctx, 'THE GREAT POLLINATOR', cx, y, {
       fontStr: font(FONTS.title, titleSize, '700'),
       color: COLORS.ink,
     });
-    y += titleSize * 0.7 + 14;
+    y += titleSize + 8; // tighter gap — title to subtitle
 
+    // Subtitle
     text(ctx, 'A Botanical Field Expedition', cx, y, {
       fontStr: `italic ${font(FONTS.body, 16)}`,
       color: rgba(COLORS.ink, 0.65),
     });
-    y += 40;
+    y += 28; // subtitle to illustration gap
 
-    // Illustration: flower with a bee silhouette above it.
+    // Illustration block — bee above the flower
     ctx.save();
-    ctx.translate(cx, y + 36);
-    drawFlower(ctx, isMobile ? 38 : 46, 12, COLORS.gold, '#5A3D1F');
-    // bee silhouette
-    ctx.translate(0, isMobile ? -56 : -66);
+    ctx.translate(cx, y + (isMobile ? 34 : 42));
+    drawFlower(ctx, isMobile ? 34 : 42, 12, COLORS.gold, '#5A3D1F');
+    ctx.translate(0, isMobile ? -50 : -60); // bee sits above flower, clear of subtitle
     ctx.fillStyle = COLORS.ink;
     ctx.beginPath();
     ctx.ellipse(0, 0, 9, 6, 0, 0, Math.PI * 2);
@@ -71,9 +72,9 @@ export const StartScreen = {
       ctx.stroke();
     }
     ctx.restore();
-    y += isMobile ? 110 : 130;
+    y += isMobile ? 86 : 100; // advance past illustration
 
-    // Rules block
+    // Rules block with tighter line height and max width
     const rules = [
       'Collect pollen across the meadow and return to the hive to bank your haul.',
       'Approach enemies from behind to sting them. Frontal attacks cost you health.',
@@ -85,33 +86,35 @@ export const StartScreen = {
     ctx.fillStyle = rgba(COLORS.ink, 0.85);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    for (const line of rules) {
-      this._wrapped(ctx, line, cx, y, Math.min(500, w - 40), 18);
-      y += this._wrappedHeight(ctx, line, Math.min(500, w - 40), 18) + 6;
+    const maxRuleW = Math.min(480, w - 60);
+    for (let ri = 0; ri < rules.length; ri++) {
+      const line = rules[ri];
+      this._wrapped(ctx, line, cx, y, maxRuleW, 17);
+      y += this._wrappedHeight(ctx, line, maxRuleW, 17) + 17; // 17px lineHeight + 17px gap between rules
     }
     ctx.restore();
+    y += 4;
 
-    y += 6;
-
-    // Primes the user for the audio init that happens on first interaction.
-    text(ctx, 'Tap anywhere to enable audio', cx, y, {
+    // Audio enable prompt
+    text(ctx, 'Tap anywhere to enable audio', cx, y + 6, {
       fontStr: font(FONTS.body, 11),
       color: rgba(COLORS.ink, 0.5),
     });
-    y += 24;
+    y += 20;
 
+    // High score (if present)
     if (highScore > 0) {
       text(ctx, `Your best: ${highScore} pollen banked`, cx, y, {
         fontStr: font(FONTS.body, 13, '600'),
         color: COLORS.gold,
       });
-      y += 28;
+      y += 24;
     }
 
-    // Press prompt (pulsing)
+    // Press prompt (pulsing) — clamped to never go off-screen
     const pulse = 0.5 + 0.5 * Math.sin(t * 3);
     ctx.globalAlpha = 0.55 + 0.45 * pulse;
-    text(ctx, isMobile ? 'TAP TO BEGIN' : 'PRESS ENTER TO BEGIN', cx, Math.min(y + 10, h - 40), {
+    text(ctx, isMobile ? 'TAP TO BEGIN' : 'PRESS ENTER TO BEGIN', cx, Math.min(y + 12, h - 30), {
       fontStr: font(FONTS.body, 14, '700'),
       color: COLORS.ink,
     });

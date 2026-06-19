@@ -64,14 +64,32 @@ export class Meadow {
       warningTimer: 0,
     };
 
-    // Thorns: solid rectangular blockers.
+    // Thorn barrier system: four named wall groups creating maze-like chokepoints.
+    // Each barrier is a wide/tall rectangle that blocks direct cross-map movement.
+    // Gaps between barriers create the navigable passages (180-220px wide).
+    // The hive at (1600,1600) sits in the central open zone.
     this.thorns = [
-      { x: 1100, y: 1080, w: 120, h: 60 },
-      { x: 2000, y: 1880, w: 60, h: 120 },
-      { x: 500, y: 1780, w: 120, h: 60 },
-      { x: 2380, y: 900, w: 60, h: 120 },
-      { x: 1480, y: 2380, w: 120, h: 60 },
-      { x: 900, y: 420, w: 60, h: 120 },
+      // --- NORTH CORRIDOR WALL ---
+      { x: 460, y: 900, w: 1040, h: 40 },   // west segment: x460→1500
+      { x: 1700, y: 900, w: 1040, h: 40 },  // east segment: x1700→2740
+
+      // --- SOUTH CORRIDOR WALL ---
+      { x: 460, y: 2260, w: 1040, h: 40 },  // west segment
+      { x: 1700, y: 2260, w: 940, h: 40 },  // east segment: x1700→2640
+
+      // --- WEST CORRIDOR WALL ---
+      { x: 900, y: 460, w: 40, h: 440 },    // north segment: y460→900
+      { x: 900, y: 1720, w: 40, h: 360 },   // south-center segment: y1720→2080
+
+      // --- EAST CORRIDOR WALL ---
+      { x: 2260, y: 460, w: 40, h: 440 },   // north segment
+      { x: 2260, y: 1720, w: 40, h: 360 },  // south-center segment
+
+      // --- INNER RING ---
+      { x: 1260, y: 1260, w: 120, h: 30 },  // NW inner
+      { x: 1820, y: 1260, w: 120, h: 30 },  // NE inner
+      { x: 1260, y: 1910, w: 120, h: 30 },  // SW inner
+      { x: 1820, y: 1910, w: 120, h: 30 },  // SE inner
     ];
 
     this._buildDecor();
