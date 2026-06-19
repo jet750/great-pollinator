@@ -4,9 +4,18 @@
 // two choice buttons. While the API call is still in flight it shows an animated
 // loading line instead. Records button rects so main.js can hitTest() pointer
 // events and resolve the chosen consequence. Pure canvas rendering — no DOM.
+//
+// Layout is a measured top-down "flex column": title → divider → narrative →
+// choice buttons, each section placed below the previous one's true height.
+// Because buttons sit relative to where the narrative ends (never anchored to a
+// fixed bottom), they can't overlap the body on narrow phones. The panel grows
+// to fit its content, is clamped to the viewport, and is clipped to its rounded
+// border so no text can bleed outside the card.
 
-import { COLORS, FONTS, font, text, panel, rgba } from '../utils/renderer.js';
+import { COLORS, FONTS, font, text, panel, rgba, roundRectPath } from '../utils/renderer.js';
 import { isBeneficialConsequence } from '../narrative/NarrativeEngine.js';
+
+const PANEL_RADIUS = 14;
 
 export class EventUI {
   constructor() {
@@ -32,20 +41,21 @@ export class EventUI {
     ctx.fillStyle = 'rgba(20, 18, 16, 0.78)';
     ctx.fillRect(0, 0, w, h);
 
-    // Centered parchment panel (scales down on small canvases).
-    const pw = Math.min(w - 32, 480);
-    const ph = Math.min(h - 32, 340);
-    const px = (w - pw) / 2;
-    const py = (h - ph) / 2;
-    panel(ctx, px, py, pw, ph, { fill: COLORS.parchment, stroke: COLORS.ink, lineWidth: 3, radius: 14 });
+    // Responsive width; narrow viewports (phones) stack the choice buttons.
+    const pw = Math.min(w - 24, 460);
+    const stacked = pw < 440;
+    const padX = 22;
+    const innerW = pw - padX * 2;
 
-    // Botanical ink illustration: a quill writing in an open journal.
-    this._drawQuill(ctx, px + pw / 2, py + 34);
-
+    // ---- Loading state: fixed-height card, no body to measure yet. ----
     if (!event) {
-      // Loading state — animated ellipsis where the text block will appear.
+      const ph = Math.min(h - 24, 220);
+      const px = (w - pw) / 2;
+      const py = (h - ph) / 2;
+      panel(ctx, px, py, pw, ph, { fill: COLORS.parchment, stroke: COLORS.ink, lineWidth: 3, radius: PANEL_RADIUS });
+      this._drawQuill(ctx, px + pw / 2, py + 44);
       const dots = '.'.repeat(1 + Math.floor((Date.now() / 400) % 3));
-      text(ctx, `Consulting the field notes${dots}`, px + pw / 2, py + ph / 2 + 10, {
+      text(ctx, `Consulting the field notes${dots}`, px + pw / 2, py + ph / 2 + 12, {
         fontStr: `italic ${font(FONTS.body, 14)}`,
         color: rgba(COLORS.ink, 0.7),
       });
@@ -53,52 +63,89 @@ export class EventUI {
       return;
     }
 
+    // ---- Measure content so the panel grows to fit (no overlap, no bleed). ----
+    const titleFont = font(FONTS.title, stacked ? 19 : 22, '600');
+    const bodyFont = font(FONTS.body, stacked ? 13 : 14);
+    const bodyLH = stacked ? 18 : 19;
+    const bodyLines = this._wrapLines(ctx, event.text, Math.min(innerW, 420), bodyFont);
+
+    const choices = event.choices.slice(0, 2);
+    const btnH = 60;
+    const btnGap = 10;
+
+    // Section heights, top to bottom.
+    const topPad = 16;
+    const quillH = 30;
+    const titleH = stacked ? 26 : 30;
+    const dividerGap = 14;
+    const afterDivider = 14;
+    const bodyH = bodyLines.length * bodyLH;
+    const beforeButtons = 18;
+    const buttonsH = stacked ? btnH * choices.length + btnGap * (choices.length - 1) : btnH;
+    const bottomPad = 18;
+
+    const contentH =
+      topPad + quillH + titleH + dividerGap + afterDivider + bodyH + beforeButtons + buttonsH + bottomPad;
+
+    // Card never taller than the viewport; clipped to its border below.
+    const ph = Math.min(contentH, h - 24);
+    const px = (w - pw) / 2;
+    const py = (h - ph) / 2;
+
+    panel(ctx, px, py, pw, ph, { fill: COLORS.parchment, stroke: COLORS.ink, lineWidth: 3, radius: PANEL_RADIUS });
+
+    // Clip to the rounded panel so nothing can bleed past the border.
+    ctx.save();
+    roundRectPath(ctx, px, py, pw, ph, PANEL_RADIUS);
+    ctx.clip();
+
+    let cy = py + topPad;
+
+    // Quill-in-journal illustration.
+    this._drawQuill(ctx, px + pw / 2, cy + 14);
+    cy += quillH;
+
     // Title.
-    text(ctx, event.title, px + pw / 2, py + 64, {
-      fontStr: font(FONTS.title, 22, '600'),
-      color: COLORS.ink,
-    });
+    text(ctx, event.title, px + pw / 2, cy + titleH / 2, { fontStr: titleFont, color: COLORS.ink });
+    cy += titleH + dividerGap;
 
     // Divider.
     ctx.strokeStyle = rgba(COLORS.ink, 0.4);
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(px + 40, py + 80);
-    ctx.lineTo(px + pw - 40, py + 80);
+    ctx.moveTo(px + 36, cy);
+    ctx.lineTo(px + pw - 36, cy);
     ctx.stroke();
+    cy += afterDivider;
 
-    // Body text (line-wrapped).
-    this._wrapText(ctx, event.text, px + pw / 2, py + 102, Math.min(pw - 48, 420), 19, {
-      fontStr: font(FONTS.body, 14),
-      color: COLORS.ink,
+    // Narrative body — each wrapped line on its own row, centered.
+    bodyLines.forEach((ln, i) => {
+      text(ctx, ln, px + pw / 2, cy + i * bodyLH + bodyLH / 2, { fontStr: bodyFont, color: COLORS.ink });
     });
+    cy += bodyH + beforeButtons;
 
-    // Choice buttons — side by side on wide canvases, stacked on narrow ones.
-    const choices = event.choices.slice(0, 2);
-    const gap = 12;
-    const btnH = 62;
-    const bottom = py + ph - 16;
-    const stacked = pw < 460;
-    const bx0 = px + 24;
-
+    // Choice buttons — laid relative to the narrative's end, so they can never
+    // overlap the body. Stacked on phones, side by side on wider screens.
+    const btnTop = cy;
     choices.forEach((choice, i) => {
       let bx;
       let by;
       let bw;
       if (stacked) {
-        bw = pw - 48;
-        bx = bx0;
-        by = bottom - btnH * (2 - i) - gap * (1 - i);
+        bw = innerW;
+        bx = px + padX;
+        by = btnTop + i * (btnH + btnGap);
       } else {
-        bw = (pw - 48 - gap) / 2;
-        bx = bx0 + i * (bw + gap);
-        by = bottom - btnH;
+        bw = (innerW - btnGap) / 2;
+        bx = px + padX + i * (bw + btnGap);
+        by = btnTop;
       }
       this._drawChoice(ctx, choice, bx, by, bw, btnH);
       this._buttons.push({ index: i, x: bx, y: by, w: bw, h: btnH });
     });
 
-    ctx.restore();
+    ctx.restore(); // clip
+    ctx.restore(); // root
   }
 
   _drawChoice(ctx, choice, x, y, w, h) {
@@ -109,19 +156,26 @@ export class EventUI {
       radius: 8,
     });
     const cx = x + w / 2;
-    text(ctx, choice.label, cx, y + 15, {
-      fontStr: font(FONTS.title, 16, '700'),
+    const maxW = w - 14; // inner padding so text never touches the button edge
+
+    const labelFont = font(FONTS.title, 16, '700');
+    text(ctx, this._fit(ctx, choice.label, maxW, labelFont), cx, y + 14, {
+      fontStr: labelFont,
       color: COLORS.ink,
     });
-    text(ctx, choice.description, cx, y + 32, {
-      fontStr: `italic ${font(FONTS.body, 11)}`,
+
+    const descFont = `italic ${font(FONTS.body, 11)}`;
+    text(ctx, this._fit(ctx, choice.description, maxW, descFont), cx, y + 31, {
+      fontStr: descFont,
       color: rgba(COLORS.ink, 0.75),
     });
+
     const c = choice.consequence;
     if (c && c.description) {
       const good = isBeneficialConsequence(c);
-      text(ctx, c.description, cx, y + 48, {
-        fontStr: font(FONTS.mono, 11, '700'),
+      const consFont = font(FONTS.mono, 11, '700');
+      text(ctx, this._fit(ctx, c.description, maxW, consFont), cx, y + 47, {
+        fontStr: consFont,
         color: good ? COLORS.gold : COLORS.crimson,
       });
     }
@@ -162,11 +216,11 @@ export class EventUI {
     ctx.restore();
   }
 
-  // Minimal centered word-wrap helper.
-  _wrapText(ctx, str, cx, y, maxWidth, lineHeight, opts) {
+  // Word-wrap `str` into an array of lines that each fit within maxWidth.
+  _wrapLines(ctx, str, maxWidth, fontStr) {
     ctx.save();
-    ctx.font = opts.fontStr;
-    const words = String(str).split(' ');
+    ctx.font = fontStr;
+    const words = String(str).split(/\s+/).filter(Boolean);
     const lines = [];
     let cur = '';
     for (const word of words) {
@@ -180,6 +234,26 @@ export class EventUI {
     }
     if (cur) lines.push(cur);
     ctx.restore();
-    lines.forEach((ln, i) => text(ctx, ln, cx, y + i * lineHeight, opts));
+    return lines;
+  }
+
+  // Truncate `str` with an ellipsis so it fits within maxWidth at the given font.
+  _fit(ctx, str, maxWidth, fontStr) {
+    const s = String(str);
+    ctx.save();
+    ctx.font = fontStr;
+    if (ctx.measureText(s).width <= maxWidth) {
+      ctx.restore();
+      return s;
+    }
+    let lo = 0;
+    let hi = s.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (ctx.measureText(`${s.slice(0, mid)}…`).width <= maxWidth) lo = mid;
+      else hi = mid - 1;
+    }
+    ctx.restore();
+    return `${s.slice(0, lo).trimEnd()}…`;
   }
 }
