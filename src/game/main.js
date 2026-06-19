@@ -1187,6 +1187,20 @@ export default class PollinatorGame {
       x = this.LW - size - 16;
       y = this.LH - size - 16;
     }
-    this.minimap.draw(ctx, { bee: this.bee, meadow: this.meadow, x, y, size });
+    this.minimap.draw(ctx, {
+      bee: this.bee,
+      meadow: this.meadow,
+      x,
+      y,
+      size,
+      flowers: this.pollen,
+      staticEnemies: this.enemies.filter(
+        (e) => !e.dead && (
+          e.constructor.name === 'CarnivorousPlant' ||
+          e.constructor.name === 'Frog' ||
+          e.constructor.name === 'Patroller'
+        )
+      ),
+    });
   }
 }
