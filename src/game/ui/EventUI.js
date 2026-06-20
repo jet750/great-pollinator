@@ -70,8 +70,21 @@ export class EventUI {
     const bodyLines = this._wrapLines(ctx, event.text, Math.min(innerW, 420), bodyFont);
 
     const choices = event.choices.slice(0, 2);
-    const btnH = 60;
     const btnGap = 10;
+
+    // Pre-wrap each consequence description so the choice buttons grow to fit it
+    // (label on top, wrapped consequence below). Both buttons share the tallest
+    // height so a side-by-side row stays aligned, and the text never bleeds out.
+    const consFont = font(FONTS.mono, 11, '700');
+    const consLH = 14;
+    const btnW0 = stacked ? innerW : (innerW - btnGap) / 2;
+    const consWrapW = btnW0 - 24; // cardWidth − 24px padding
+    const choiceConsLines = choices.map((c) => {
+      const cons = c.consequence;
+      return cons && cons.description ? this._wrapLines(ctx, cons.description, consWrapW, consFont) : [];
+    });
+    const maxConsLines = Math.max(1, ...choiceConsLines.map((l) => l.length));
+    const btnH = 28 + maxConsLines * consLH; // label band + wrapped consequence
 
     // Section heights, top to bottom.
     const topPad = 16;
@@ -140,7 +153,7 @@ export class EventUI {
         bx = px + padX + i * (bw + btnGap);
         by = btnTop;
       }
-      this._drawChoice(ctx, choice, bx, by, bw, btnH);
+      this._drawChoice(ctx, choice, choiceConsLines[i], bx, by, bw, btnH);
       this._buttons.push({ index: i, x: bx, y: by, w: bw, h: btnH });
     });
 
@@ -148,7 +161,7 @@ export class EventUI {
     ctx.restore(); // root
   }
 
-  _drawChoice(ctx, choice, x, y, w, h) {
+  _drawChoice(ctx, choice, consLines, x, y, w, h) {
     panel(ctx, x, y, w, h, {
       fill: rgba(COLORS.gold, 0.1),
       stroke: COLORS.ink,
@@ -156,27 +169,28 @@ export class EventUI {
       radius: 8,
     });
     const cx = x + w / 2;
-    const maxW = w - 14; // inner padding so text never touches the button edge
+    const maxW = w - 24; // inner padding so text never touches the button edge
 
+    // Choice button text.
     const labelFont = font(FONTS.title, 16, '700');
-    text(ctx, this._fit(ctx, choice.label, maxW, labelFont), cx, y + 14, {
+    text(ctx, this._fit(ctx, choice.label, maxW, labelFont), cx, y + 16, {
       fontStr: labelFont,
       color: COLORS.ink,
     });
 
-    const descFont = `italic ${font(FONTS.body, 11)}`;
-    text(ctx, this._fit(ctx, choice.description, maxW, descFont), cx, y + 31, {
-      fontStr: descFont,
-      color: rgba(COLORS.ink, 0.75),
-    });
-
-    const c = choice.consequence;
-    if (c && c.description) {
-      const good = isBeneficialConsequence(c);
+    // Consequence outcome — wrapped within the card, colored by benefit. (The
+    // old italic `choice.description` line rendered "undefined" — choices carry
+    // no such field — so it is gone; only label + consequence.description show.)
+    if (consLines && consLines.length) {
+      const good = isBeneficialConsequence(choice.consequence);
       const consFont = font(FONTS.mono, 11, '700');
-      text(ctx, this._fit(ctx, c.description, maxW, consFont), cx, y + 47, {
-        fontStr: consFont,
-        color: good ? COLORS.gold : COLORS.crimson,
+      const consLH = 14;
+      const startY = y + 34;
+      consLines.forEach((ln, i) => {
+        text(ctx, ln, cx, startY + i * consLH, {
+          fontStr: consFont,
+          color: good ? COLORS.gold : COLORS.crimson,
+        });
       });
     }
   }
