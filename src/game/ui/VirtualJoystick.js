@@ -8,6 +8,7 @@ import { clamp } from '../utils/math.js';
 const BASE_RADIUS = 55;
 const KNOB_RADIUS = 22;
 const ATTACK_RADIUS = 40;
+const SECONDARY_RADIUS = 32;
 const HEAL_RADIUS = 28;
 const DEADZONE = 0.28;
 
@@ -16,6 +17,7 @@ export class VirtualJoystick {
     this.moveVec = { x: 0, y: 0 };
     this._attackRequested = false;
     this._healRequested = false;
+    this._secondaryRequested = false;
 
     this._joyId = null;
     this._knobX = 0; // offset from base center
@@ -24,6 +26,16 @@ export class VirtualJoystick {
     this._attackId = null;
     this._healActive = false;
     this._healId = null;
+    this._secondaryActive = false; // visual press
+    this._secondaryId = null;
+    this._secondaryHeld = false;    // true while physically pressed (hold-detect)
+    this._secondaryHoldTimer = 0;
+
+    // Handedness: when flipped, the joystick sits on the right and the action
+    // buttons on the left. Persisted across sessions.
+    let flipped = false;
+    try { flipped = localStorage.getItem('pollinator_joystick_flip') === 'on'; } catch (e) { flipped = false; }
+    this.flipped = flipped;
 
     this.w = 0;
     this.h = 0;
@@ -32,10 +44,16 @@ export class VirtualJoystick {
   // Offsets include a 16px bottom inset on top of the original gaps so there is
   // always visible breathing room above any remaining system UI.
   _baseCenter() {
-    return { x: 95, y: this.h - 111 };
+    return { x: this.flipped ? this.w - 95 : 95, y: this.h - 111 };
   }
   _attackCenter() {
-    return { x: this.w - 75, y: this.h - 111 };
+    return { x: this.flipped ? 75 : this.w - 75, y: this.h - 111 };
+  }
+  // Secondary sits between the joystick and attack button — centered
+  // horizontally, at the attack button's vertical level (symmetric, so the
+  // handedness flip leaves it in place).
+  _secondaryCenter() {
+    return { x: this.w / 2, y: this.h - 111 };
   }
   _healCenter() {
     return { x: this.w / 2, y: this.h - 66 };
@@ -55,8 +73,9 @@ export class VirtualJoystick {
   touchStart(id, x, y) {
     const base = this._baseCenter();
     const atk = this._attackCenter();
+    const sec = this._secondaryCenter();
     const heal = this._healCenter();
-    // Generous hit area for the joystick (whole lower-left quadrant near base).
+    // Generous hit area for the joystick (whole quadrant near the base).
     if (this._joyId == null && this._within(base.x, base.y, x, y, BASE_RADIUS + 40)) {
       this._joyId = id;
       this._updateKnob(x, y);
@@ -66,6 +85,15 @@ export class VirtualJoystick {
       this._attackActive = true;
       this._attackId = id;
       this._attackRequested = true;
+      return;
+    }
+    // Secondary checked before heal — they share the center column and overlap.
+    if (this._within(sec.x, sec.y, x, y, SECONDARY_RADIUS + 8)) {
+      this._secondaryActive = true;
+      this._secondaryId = id;
+      this._secondaryRequested = true;
+      this._secondaryHeld = true;
+      this._secondaryHoldTimer = 0;
       return;
     }
     if (this._within(heal.x, heal.y, x, y, HEAL_RADIUS + 10)) {
@@ -90,6 +118,11 @@ export class VirtualJoystick {
       this._attackActive = false;
       this._attackId = null;
     }
+    if (id === this._secondaryId) {
+      this._secondaryActive = false;
+      this._secondaryId = null;
+      this._secondaryHeld = false;
+    }
     if (id === this._healId) {
       this._healActive = false;
       this._healId = null;
@@ -99,10 +132,13 @@ export class VirtualJoystick {
   reset() {
     this._joyId = null;
     this._attackId = null;
+    this._secondaryId = null;
     this._healId = null;
     this._knobX = 0;
     this._knobY = 0;
     this._attackActive = false;
+    this._secondaryActive = false;
+    this._secondaryHeld = false;
     this._healActive = false;
     this.moveVec = { x: 0, y: 0 };
   }
@@ -141,10 +177,27 @@ export class VirtualJoystick {
     this._healRequested = false;
     return v;
   }
+  pollSecondary() {
+    const v = this._secondaryRequested;
+    this._secondaryRequested = false;
+    return v;
+  }
+  // True while the secondary button is physically pressed (for hold abilities).
+  isSecondaryHeld() {
+    return this._secondaryHeld;
+  }
+
+  // Swap the joystick / action buttons left↔right and persist the choice.
+  toggleHandedness() {
+    this.flipped = !this.flipped;
+    try { localStorage.setItem('pollinator_joystick_flip', this.flipped ? 'on' : 'off'); } catch (e) { /* ignore */ }
+    return this.flipped;
+  }
 
   draw(ctx) {
     const base = this._baseCenter();
     const atk = this._attackCenter();
+    const sec = this._secondaryCenter();
     const heal = this._healCenter();
 
     // joystick base
@@ -187,6 +240,28 @@ export class VirtualJoystick {
     ctx.closePath();
     ctx.fill();
     ctx.restore();
+
+    // secondary button (petal/web — used by Butterfly & Spider secondary skills)
+    ctx.save();
+    ctx.globalAlpha = this._secondaryActive ? 0.9 : 0.6;
+    ctx.fillStyle = rgba(COLORS.lavender, 0.6);
+    ctx.beginPath();
+    ctx.arc(sec.x, sec.y, SECONDARY_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = COLORS.ink;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // four small arcs radiating from the center (reads as petals or web strands)
+    ctx.strokeStyle = rgba(COLORS.parchment, 0.9);
+    ctx.lineWidth = 1.6;
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.arc(sec.x + Math.cos(a) * 10, sec.y + Math.sin(a) * 10, 6, a - 0.9, a + 0.9);
+      ctx.stroke();
+    }
+    ctx.restore();
+    text(ctx, '✦', sec.x, sec.y, { fontStr: font(FONTS.mono, 11, '700'), color: rgba(COLORS.parchment, 0.95) });
 
     // heal button
     ctx.save();

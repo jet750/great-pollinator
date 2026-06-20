@@ -186,9 +186,10 @@ export class Spider {
     if (this.thornHitCooldown > 0) this.thornHitCooldown -= dt;
     this.fsm.update(dt);
 
-    // Web Layer: extrude a web every WEB_INTERVAL while the attack is held.
+    // Web Layer: extrude a web every WEB_INTERVAL while the secondary (or held
+    // attack) is engaged. On mobile only the dedicated secondary button can hold.
     if (!this.isDead() && this.fsm.is('FLYING')) {
-      if (env.attackHeld) {
+      if (env.attackHeld || env.secondaryHeld) {
         this._webTimer -= dt;
         if (this._webTimer <= 0) {
           this._placeWeb();

@@ -206,9 +206,10 @@ export class Butterfly {
 
     if (env.healPressed) this.useHealingItem();
 
-    // Petal Burst: charges while the attack is held after a glide dash lands.
+    // Petal Burst: charges while the secondary (or held attack) is engaged after
+    // a glide dash lands. On mobile only the dedicated secondary button can hold.
     if (this._petalArmed) {
-      if (env.attackHeld) {
+      if (env.attackHeld || env.secondaryHeld) {
         this._petalCharge += dt;
         if (this._petalCharge >= PETAL_CHARGE) {
           this._firePetalBurst(env);

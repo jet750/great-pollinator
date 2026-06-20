@@ -4,14 +4,24 @@
 // synthesised on the fly with oscillators / noise buffers and short gain
 // envelopes (each effect under ~300ms). The AudioContext is created lazily on
 // the first user interaction to satisfy browser autoplay policies; until then
-// every play method is a no-op. A master gain caps overall loudness, and mute
-// simply drops it to 0.
+// every play method is a no-op.
+//
+// Signal graph: each effect's gain → _sfxGain → _master → destination.
+//   _master  caps overall loudness (Master Volume slider, scaled 0–0.8).
+//   _sfxGain scales sound-effect loudness (SFX Volume slider, 0–1.0).
+//   mute simply drops _master to 0.
+
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
 export class AudioManager {
   constructor() {
     this._ctx = null;
     this._muted = false;
     this._master = null;
+    this._sfxGain = null;
+    // Target gain values, applied to the nodes on init() and live thereafter.
+    this._masterGain = 0.4; // 0–0.8 (Master Volume slider × 0.8)
+    this._sfxLevel = 0.8;   // 0–1.0 (SFX Volume slider)
   }
 
   init() {
@@ -21,18 +31,44 @@ export class AudioManager {
     if (!Ctx) return; // no Web Audio support — every play method stays a no-op
     this._ctx = new Ctx();
     this._master = this._ctx.createGain();
-    this._master.gain.value = this._muted ? 0 : 0.4;
+    this._master.gain.value = this._muted ? 0 : this._masterGain;
     this._master.connect(this._ctx.destination);
+    // SFX submix sits between individual effect gains and the master.
+    this._sfxGain = this._ctx.createGain();
+    this._sfxGain.gain.value = this._sfxLevel;
+    this._sfxGain.connect(this._master);
   }
 
   get muted() {
     return this._muted;
   }
 
+  /** Master Volume as a 0–100 slider value. */
+  get masterVolume() {
+    return Math.round((this._masterGain / 0.8) * 100);
+  }
+
+  /** SFX Volume as a 0–100 slider value. */
+  get sfxVolume() {
+    return Math.round(this._sfxLevel * 100);
+  }
+
   toggleMute() {
     this._muted = !this._muted;
-    if (this._master) this._master.gain.value = this._muted ? 0 : 0.4;
+    if (this._master) this._master.gain.value = this._muted ? 0 : this._masterGain;
     return this._muted;
+  }
+
+  /** Set master volume from a 0–100 slider value (scaled to 0–0.8 gain). */
+  setMasterVolume(slider) {
+    this._masterGain = clamp01(slider / 100) * 0.8;
+    if (this._master && !this._muted) this._master.gain.value = this._masterGain;
+  }
+
+  /** Set SFX volume from a 0–100 slider value (scaled to 0–1.0 gain). */
+  setSfxVolume(slider) {
+    this._sfxLevel = clamp01(slider / 100);
+    if (this._sfxGain) this._sfxGain.gain.value = this._sfxLevel;
   }
 
   // --- Sound effect methods ---
@@ -43,7 +79,7 @@ export class AudioManager {
     const osc = this._ctx.createOscillator();
     const gain = this._ctx.createGain();
     osc.connect(gain);
-    gain.connect(this._master);
+    gain.connect(this._sfxGain);
     osc.type = 'sine';
     osc.frequency.value = pitches[pollenType] || 523;
     gain.gain.setValueAtTime(0.3, this._ctx.currentTime);
@@ -65,7 +101,7 @@ export class AudioManager {
     src.buffer = buf;
     src.connect(filt);
     filt.connect(gain);
-    gain.connect(this._master);
+    gain.connect(this._sfxGain);
     gain.gain.value = 0.25;
     src.start();
   }
@@ -75,7 +111,7 @@ export class AudioManager {
     const osc = this._ctx.createOscillator();
     const gain = this._ctx.createGain();
     osc.connect(gain);
-    gain.connect(this._master);
+    gain.connect(this._sfxGain);
     osc.type = 'sawtooth';
     osc.frequency.setValueAtTime(180, this._ctx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(60, this._ctx.currentTime + 0.15);
@@ -90,7 +126,7 @@ export class AudioManager {
     const osc = this._ctx.createOscillator();
     const gain = this._ctx.createGain();
     osc.connect(gain);
-    gain.connect(this._master);
+    gain.connect(this._sfxGain);
     osc.type = 'square';
     osc.frequency.setValueAtTime(440, this._ctx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(220, this._ctx.currentTime + 0.08);
@@ -106,7 +142,7 @@ export class AudioManager {
       const osc = this._ctx.createOscillator();
       const gain = this._ctx.createGain();
       osc.connect(gain);
-      gain.connect(this._master);
+      gain.connect(this._sfxGain);
       osc.type = 'sine';
       osc.frequency.value = freq;
       const t = this._ctx.currentTime + i * 0.08;
@@ -122,7 +158,7 @@ export class AudioManager {
     const osc = this._ctx.createOscillator();
     const gain = this._ctx.createGain();
     osc.connect(gain);
-    gain.connect(this._master);
+    gain.connect(this._sfxGain);
     osc.type = 'sine';
     osc.frequency.setValueAtTime(440, this._ctx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(880, this._ctx.currentTime + 0.25);
@@ -137,7 +173,7 @@ export class AudioManager {
     const osc = this._ctx.createOscillator();
     const gain = this._ctx.createGain();
     osc.connect(gain);
-    gain.connect(this._master);
+    gain.connect(this._sfxGain);
     osc.type = 'sine';
     osc.frequency.setValueAtTime(440, this._ctx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(110, this._ctx.currentTime + 0.6);
@@ -153,7 +189,7 @@ export class AudioManager {
       const osc = this._ctx.createOscillator();
       const gain = this._ctx.createGain();
       osc.connect(gain);
-      gain.connect(this._master);
+      gain.connect(this._sfxGain);
       osc.type = 'sine';
       osc.frequency.value = freq;
       const t = this._ctx.currentTime + i * 0.04;
@@ -181,7 +217,7 @@ export class AudioManager {
     src.buffer = buf;
     src.connect(filt);
     filt.connect(gain);
-    gain.connect(this._master);
+    gain.connect(this._sfxGain);
     gain.gain.value = 0.5;
     src.start();
   }

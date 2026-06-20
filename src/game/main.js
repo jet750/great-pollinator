@@ -40,6 +40,7 @@ import { Minimap } from './ui/Minimap.js';
 import { HiveStore, UPGRADES, CRAFTS } from './ui/HiveStore.js';
 import { BiomeSelect } from './ui/BiomeSelect.js';
 import { CheatMenu } from './ui/CheatMenu.js';
+import { SettingsMenu } from './ui/SettingsMenu.js';
 import { VirtualJoystick } from './ui/VirtualJoystick.js';
 import { StartScreen } from './ui/StartScreen.js';
 import { GameOverScreen } from './ui/GameOverScreen.js';
@@ -99,6 +100,9 @@ export default class PollinatorGame {
     this.biomeSelect = new BiomeSelect();
     this.cheatMenu = new CheatMenu();
     this._cheatOpen = false;
+    // Settings overlay — reachable from START (Esc) or HIVE (gear), never mid-game.
+    this.settings = new SettingsMenu();
+    this._settingsOpen = false;
     // Mobile combo detector — 7 rapid attack-button taps within 2.5s opens the menu.
     this._cheatTapTimes = [];
     this.minimap = new Minimap();
@@ -108,6 +112,9 @@ export default class PollinatorGame {
     // (see the input handlers); until then every play call is a no-op.
     this.audio = new AudioManager();
     this._muteBtnRect = null; // set each HUD frame; hit-tested on pointer events
+    this._handBtnRect = null; // mobile handedness toggle; set each HUD frame
+    // Apply persisted audio volume preferences to the mixer.
+    this._loadPrefs();
 
     // Oregon-Trail-style AI narrative layer. The engine generates a field
     // journal event via the serverless proxy while the player is in the hive;
@@ -137,6 +144,8 @@ export default class PollinatorGame {
     this._pendingHeal = false;
     this._pendingEnter = false;
     this._pendingEscape = false;
+    this._pendingSecondary = false; // F-key edge flag (desktop secondary action)
+    this._spaceHeldTime = 0;        // seconds SPACE has been held (desktop secondary-hold)
     this._pointer = { x: -1, y: -1 }; // last pointer position (for hover)
 
     // run state (built in newRun)
@@ -182,6 +191,7 @@ export default class PollinatorGame {
     window.addEventListener('keyup', this._onKeyUp);
     this.canvas.addEventListener('mousedown', this._onMouseDown);
     this.canvas.addEventListener('mousemove', this._onMouseMove);
+    window.addEventListener('mouseup', this._onMouseUp);
     this.canvas.addEventListener('touchstart', this._onTouchStart, { passive: false });
     this.canvas.addEventListener('touchmove', this._onTouchMove, { passive: false });
     this.canvas.addEventListener('touchend', this._onTouchEnd, { passive: false });
@@ -198,6 +208,7 @@ export default class PollinatorGame {
     window.removeEventListener('keyup', this._onKeyUp);
     this.canvas.removeEventListener('mousedown', this._onMouseDown);
     this.canvas.removeEventListener('mousemove', this._onMouseMove);
+    window.removeEventListener('mouseup', this._onMouseUp);
     this.canvas.removeEventListener('touchstart', this._onTouchStart);
     this.canvas.removeEventListener('touchmove', this._onTouchMove);
     this.canvas.removeEventListener('touchend', this._onTouchEnd);
@@ -210,6 +221,7 @@ export default class PollinatorGame {
     this._onKeyUp = (e) => this.keys.delete(e.key.toLowerCase());
     this._onMouseDown = (e) => this._handleMouseDown(e);
     this._onMouseMove = (e) => this._handleMouseMove(e);
+    this._onMouseUp = () => this.settings.endDrag();
     this._onTouchStart = (e) => this._handleTouchStart(e);
     this._onTouchMove = (e) => this._handleTouchMove(e);
     this._onTouchEnd = (e) => this._handleTouchEnd(e);
@@ -265,6 +277,7 @@ export default class PollinatorGame {
     if (e.repeat) return;
     this.keys.add(k);
     if (k === ' ') this._pendingAttack = true;
+    if (k === 'f') this._pendingSecondary = true;
     if (k === 'h') this._pendingHeal = true;
     if (k === 'enter') this._pendingEnter = true;
     if (k === 'escape') this._pendingEscape = true;
@@ -279,6 +292,12 @@ export default class PollinatorGame {
   _handleMouseMove(e) {
     const { x, y } = this._toLogical(e.clientX, e.clientY);
     this._pointer = { x, y };
+    // While the settings overlay is open, route moves to its slider drag.
+    if (this._settingsOpen) {
+      const intent = this.settings.drag(x, y);
+      if (intent) this._handleSettingsIntent(intent);
+      return;
+    }
     if (this.state === 'BIOME_SELECT') this.biomeSelect.setPointer(x, y);
   }
 
@@ -296,11 +315,22 @@ export default class PollinatorGame {
       return;
     }
 
+    // While the settings overlay is open it is modal — route the tap to it.
+    if (this._settingsOpen) {
+      const t = e.changedTouches[0];
+      if (t) {
+        const p = this._toLogical(t.clientX, t.clientY);
+        this._handlePointer(p.x, p.y);
+      }
+      return;
+    }
+
     // The mute button overlays the joystick layer, so check it first on mobile.
     const first = e.changedTouches[0];
     if (first) {
       const fp = this._toLogical(first.clientX, first.clientY);
       if ((this.state === 'PLAYING' || this.state === 'HIVE') && this._hitMute(fp.x, fp.y)) return;
+      if (this.state === 'PLAYING' && this._hitHandedness(fp.x, fp.y)) return;
     }
 
     if (this.state === 'PLAYING' && this.isMobile) {
@@ -333,6 +363,16 @@ export default class PollinatorGame {
 
   _handleTouchMove(e) {
     e.preventDefault();
+    // Settings sliders are drag-tracked while the overlay is open.
+    if (this._settingsOpen) {
+      const t = e.changedTouches[0];
+      if (t) {
+        const p = this._toLogical(t.clientX, t.clientY);
+        const intent = this.settings.drag(p.x, p.y);
+        if (intent) this._handleSettingsIntent(intent);
+      }
+      return;
+    }
     if (this.state === 'PLAYING' && this.isMobile) {
       for (const t of e.changedTouches) {
         const p = this._toLogical(t.clientX, t.clientY);
@@ -343,6 +383,10 @@ export default class PollinatorGame {
 
   _handleTouchEnd(e) {
     e.preventDefault();
+    if (this._settingsOpen) {
+      this.settings.endDrag();
+      return;
+    }
     if (this.isMobile) {
       for (const t of e.changedTouches) this.joystick.touchEnd(t.identifier);
     }
@@ -359,8 +403,90 @@ export default class PollinatorGame {
     return false;
   }
 
+  // Toggle joystick handedness if (x,y) hits the HUD ⇄ button. Returns true on hit.
+  _hitHandedness(x, y) {
+    const r = this._handBtnRect;
+    if (!r) return false;
+    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+      this.joystick.toggleHandedness();
+      return true;
+    }
+    return false;
+  }
+
+  // ----------------------------------------------------------------- settings
+  _loadPrefs() {
+    const readInt = (key, dflt) => {
+      try {
+        const v = parseInt(localStorage.getItem(key), 10);
+        return Number.isFinite(v) ? v : dflt;
+      } catch (e) {
+        return dflt;
+      }
+    };
+    this.audio.setMasterVolume(readInt('pollinator_vol_master', 40));
+    this.audio.setSfxVolume(readInt('pollinator_vol_sfx', 80));
+  }
+
+  _savePref(key, value) {
+    try { localStorage.setItem(key, String(value)); } catch (e) { /* ignore */ }
+  }
+
+  // Whether the desktop control hint bar should render (persisted, default on).
+  _showControls() {
+    try { return localStorage.getItem('pollinator_show_controls') !== 'off'; } catch (e) { return true; }
+  }
+
+  // Apply an intent returned by the SettingsMenu, persisting where relevant.
+  _handleSettingsIntent(intent) {
+    switch (intent.action) {
+      case 'close':
+        this._settingsOpen = false;
+        this.settings.endDrag();
+        break;
+      case 'set-volume':
+        if (intent.kind === 'master') {
+          this.audio.setMasterVolume(intent.value);
+          this._savePref('pollinator_vol_master', intent.value);
+        } else {
+          this.audio.setSfxVolume(intent.value);
+          this._savePref('pollinator_vol_sfx', intent.value);
+        }
+        break;
+      case 'toggle-mute':
+        this.audio.toggleMute();
+        break;
+      case 'toggle-joystick':
+        this.joystick.toggleHandedness();
+        break;
+      case 'toggle-controls':
+        this._savePref('pollinator_show_controls', this._showControls() ? 'off' : 'on');
+        break;
+      default:
+        break;
+    }
+  }
+
+  _drawSettingsOverlay() {
+    if (!this._settingsOpen) return;
+    this.settings.draw(this.ctx, {
+      w: this.LW,
+      h: this.LH,
+      audio: this.audio,
+      joystick: this.joystick,
+      showControls: this._showControls(),
+    });
+  }
+
   // routes a click/tap based on the current top-level state
   _handlePointer(x, y) {
+    // Settings overlay is the topmost modal: route the tap to it. Taps outside
+    // its panel are absorbed (only the Close button dismisses it).
+    if (this._settingsOpen) {
+      const intent = this.settings.hitTest(x, y);
+      if (intent) this._handleSettingsIntent(intent);
+      return;
+    }
     // Cheat overlay is modal: it consumes the tap, applying a cheat on a button
     // hit and closing on an outside tap. Checked before everything else.
     if (this._cheatOpen) {
@@ -777,13 +903,20 @@ export default class PollinatorGame {
     if (this.shake.time > 0) this.shake.time -= dt;
 
     if (this.state === 'START') {
-      if (this._pendingEnter) this._beginExpedition();
+      // Esc toggles the settings overlay; Enter only starts when it's closed.
+      if (this._pendingEscape) this._settingsOpen = !this._settingsOpen;
+      if (this._pendingEnter && !this._settingsOpen) this._beginExpedition();
     } else if (this.state === 'BIOME_SELECT') {
       this.biomeSelect.update(this._pointer);
     } else if (this.state === 'PLAYING') {
       this._updatePlaying(dt);
     } else if (this.state === 'HIVE') {
-      if (this._pendingEscape) this._exitHive();
+      // With settings open over the hive, Esc closes it; otherwise Esc flies out.
+      if (this._settingsOpen) {
+        if (this._pendingEscape) this._settingsOpen = false;
+      } else if (this._pendingEscape) {
+        this._exitHive();
+      }
     } else if (this.state === 'EVENT') {
       // The world is paused while the event shows. If the API call failed
       // (no event arrived and nothing is in flight), resume the field silently.
@@ -796,6 +929,7 @@ export default class PollinatorGame {
 
     // consume edge events
     this._pendingAttack = false;
+    this._pendingSecondary = false;
     this._pendingHeal = false;
     this._pendingEnter = false;
     this._pendingEscape = false;
@@ -881,6 +1015,18 @@ export default class PollinatorGame {
       ? (typeof this.joystick.attackHeld === 'function' ? this.joystick.attackHeld() : false)
       : this.keys.has(' ');
 
+    // Track SPACE hold duration for the desktop secondary-hold detection.
+    if (this.keys.has(' ')) this._spaceHeldTime += dt;
+    else this._spaceHeldTime = 0;
+
+    // Secondary action (Butterfly petal burst / Spider web layer). Mobile uses
+    // the dedicated secondary button; desktop uses F (edge) plus a SPACE-hold
+    // (>0.4s) to drive the hold-based abilities.
+    const secondaryPressed = this.isMobile ? this.joystick.pollSecondary() : this._pendingSecondary;
+    const secondaryHeld = this.isMobile
+      ? this.joystick.isSecondaryHeld()
+      : (this.keys.has(' ') && this._spaceHeldTime > 0.4);
+
     // Snapshot for audio: whether an attack will actually fire this frame, and
     // total enemy HP so we can detect a landed hit afterward.
     const attackWillFire = attackPressed && bee.canAttack();
@@ -896,6 +1042,8 @@ export default class PollinatorGame {
       moveVec,
       attackPressed,
       attackHeld,
+      secondaryPressed,
+      secondaryHeld,
       healPressed,
       meadow: this.meadow,
       queryEnemies,
@@ -1368,7 +1516,9 @@ export default class PollinatorGame {
 
   // ------------------------------------------------------------ hive economy
   _handleStoreIntent(intent) {
-    if (intent.action === 'exit') {
+    if (intent.action === 'settings') {
+      this._settingsOpen = true;
+    } else if (intent.action === 'exit') {
       this._exitHive();
     } else if (intent.action === 'deposit') {
       this._deposit();
@@ -1551,6 +1701,7 @@ export default class PollinatorGame {
         highScore: this.progress.highScore,
         t: this.time,
       });
+      this._drawSettingsOverlay();
       return;
     }
 
@@ -1586,6 +1737,9 @@ export default class PollinatorGame {
 
     // HUD (PLAYING and HIVE).
     this._muteBtnRect = { x: this.LW - 84, y: 18, w: 28, h: 28 };
+    this._handBtnRect = (this.isMobile && this.state === 'PLAYING')
+      ? { x: this.LW / 2 - 12, y: this.LH - 30, w: 24, h: 24 }
+      : null;
     HUD.draw(ctx, {
       bee: this.bee,
       banked: this.progress.totalBanked,
@@ -1601,6 +1755,8 @@ export default class PollinatorGame {
       modifiers: this._activeModifierTags(),
       killScore: this.progress.killScore,
       activeBiome: this.activeBiome || 'meadow',
+      state: this.state,
+      handBtnRect: this._handBtnRect,
     });
     this._renderMinimap(ctx);
     if (this.isMobile && this.state === 'PLAYING') this.joystick.draw(ctx);
@@ -1645,6 +1801,9 @@ export default class PollinatorGame {
     if (this._cheatOpen) {
       this.cheatMenu.draw(ctx, { w: this.LW, h: this.LH });
     }
+
+    // Settings overlay sits on top of everything (HUD, store, cheat menu).
+    this._drawSettingsOverlay();
   }
 
   _renderWorld(ctx) {

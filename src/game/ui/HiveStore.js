@@ -91,6 +91,22 @@ export class HiveStore {
       color: COLORS.ink,
     });
 
+    // ---- Settings gear (top-right corner of the panel) ----
+    const gearW = 28;
+    const gearX = px + pw - gearW - 10;
+    const gearY = py + 10;
+    panel(ctx, gearX, gearY, gearW, gearW, {
+      fill: rgba(COLORS.ink, 0.05),
+      stroke: rgba(COLORS.ink, 0.35),
+      lineWidth: 1,
+      radius: 6,
+    });
+    text(ctx, '⚙', gearX + gearW / 2, gearY + gearW / 2 + 1, {
+      fontStr: font(FONTS.body, 16),
+      color: COLORS.ink,
+    });
+    this._btn('settings', gearX, gearY, gearW, gearW);
+
     // ---- tabs ----
     const tabs = ['BANK', 'STORE', 'HANGAR', 'BIOMES'];
     const tabW = (pw - 60) / 4;

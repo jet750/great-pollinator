@@ -19,7 +19,7 @@ const COMBO_STYLES = {
 };
 
 export const HUD = {
-  draw(ctx, { bee, banked, activePowerUp, w, h, isMobile, combo, rainActive, t = 0, muteState = false, muteBtnRect = null, modifiers = [], killScore = 0, activeBiome = 'meadow' }) {
+  draw(ctx, { bee, banked, activePowerUp, w, h, isMobile, combo, rainActive, t = 0, muteState = false, muteBtnRect = null, modifiers = [], killScore = 0, activeBiome = 'meadow', state = 'PLAYING', handBtnRect = null }) {
     // Dark biomes (Forest, Greenhouse) use a near-black terrain, against which
     // the ink-colored HUD text becomes unreadable. Lay a semi-transparent light
     // backdrop behind the top-left HUD cluster to restore contrast.
@@ -239,6 +239,50 @@ export const HUD = {
         color: rgba(COLORS.ink, 0.6),
         align: 'left',
       });
+    }
+
+    // ---- Mobile handedness toggle (⇄) — bottom center, below the heal button ----
+    if (handBtnRect && isMobile && state === 'PLAYING') {
+      const r = handBtnRect;
+      panel(ctx, r.x, r.y, r.w, r.h, {
+        fill: 'rgba(0,0,0,0.35)',
+        stroke: rgba(COLORS.parchment, 0.5),
+        lineWidth: 1.5,
+        radius: 6,
+      });
+      text(ctx, '⇄', r.x + r.w / 2, r.y + r.h / 2, {
+        fontStr: font(FONTS.body, 14, '700'),
+        color: rgba(COLORS.parchment, 0.85),
+      });
+    }
+
+    // ---- Desktop control hint bar (persistent, PLAYING only) ----
+    if (!isMobile && state === 'PLAYING') {
+      let showControls = true;
+      try { showControls = localStorage.getItem('pollinator_show_controls') !== 'off'; } catch (e) { showControls = true; }
+      if (showControls) {
+        const barH = 28;
+        const barY = h - barH;
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.fillRect(0, barY, w, barH);
+        ctx.restore();
+        const segments = [
+          'WASD / ↑↓←→   Move',
+          'SPACE   Attack / Dash',
+          'F   Secondary',
+          'H   Heal',
+          'ESC   Hive',
+          '`   Dev Menu',
+        ];
+        const slotW = w / segments.length;
+        segments.forEach((seg, i) => {
+          text(ctx, seg, slotW * (i + 0.5), barY + barH / 2, {
+            fontStr: font(FONTS.body, 10),
+            color: 'rgba(255,255,255,0.7)',
+          });
+        });
+      }
     }
   },
 };
